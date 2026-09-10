@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -99,6 +100,28 @@ type TileJobResult struct {
 	geohash string
 	node    *TileNode
 	err     error
+}
+
+const tileModelRootDir = "tiles"
+
+// tileModelRelativePath returns a URL-style relative path for a geohash tile.
+// A directory is added for every two geohash characters. Each directory keeps
+// the complete prefix accumulated so far, making its spatial prefix directly
+// identifiable while preventing a single directory from holding too many GLBs.
+//
+// Example: wtw3sjq9 -> tiles/wt/wtw3/wtw3sj/wtw3sjq9.glb
+func tileModelRelativePath(geohash string) string {
+	parts := []string{tileModelRootDir}
+	prefixLength := len(geohash) - 2
+	for start := 0; start < prefixLength; start += 2 {
+		end := start + 2
+		if end > prefixLength {
+			end = prefixLength
+		}
+		parts = append(parts, geohash[:end])
+	}
+	parts = append(parts, geohash+".glb")
+	return path.Join(parts...)
 }
 
 func getNetworkPath(code string) (string, error) {
@@ -629,34 +652,27 @@ func RemoveFilesOlderThan(dir string, maxAge time.Duration) error {
 	now := time.Now()
 	cutoff := now.Add(-maxAge)
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return fmt.Errorf("read dir failed: %w", err)
-	}
-
-	for _, entry := range entries {
-		// Skip directories
-		if entry.IsDir() {
-			continue
+	return filepath.WalkDir(dir, func(fullPath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("walk tileset path failed (%s): %w", fullPath, walkErr)
 		}
-
-		fullPath := filepath.Join(dir, entry.Name())
+		if entry.IsDir() {
+			return nil
+		}
 
 		info, err := entry.Info()
 		if err != nil {
 			return fmt.Errorf("get file info failed (%s): %w", fullPath, err)
 		}
-
-		if info.ModTime().Before(cutoff) {
-			if err := os.Remove(fullPath); err != nil {
-				return fmt.Errorf("remove file failed (%s): %w", fullPath, err)
-			} else {
-				log.Infof("remove file expired (%s)", fullPath)
-			}
+		if !info.ModTime().Before(cutoff) {
+			return nil
 		}
-	}
-
-	return nil
+		if err := os.Remove(fullPath); err != nil {
+			return fmt.Errorf("remove file failed (%s): %w", fullPath, err)
+		}
+		log.Infof("remove file expired (%s)", fullPath)
+		return nil
+	})
 }
 
 func buildTileByHashModels(models map[string][]*GeoHashModel, tile *GeoHashTile, tilesetsFolder string) (string, *BuildModel, error) {
@@ -673,7 +689,7 @@ func buildTileByHashModels(models map[string][]*GeoHashModel, tile *GeoHashTile,
 	}
 	minZ = math.Floor(minZ)
 	maxZ = math.Ceil(maxZ)
-	fn := fmt.Sprintf("%s.glb", tile.Geohash)
+	fn := tileModelRelativePath(tile.Geohash)
 	region := [6]float64{tile.MinX, tile.MinY, tile.MaxX, tile.MaxY, minZ, maxZ}
 	center := []float64{(tile.MaxX + tile.MinX) / 2.0, (tile.MaxY + tile.MinY) / 2.0, 0}
 
@@ -685,7 +701,10 @@ func buildTileByHashModels(models map[string][]*GeoHashModel, tile *GeoHashTile,
 	}
 	log.Infof("merged hash tile for %s r:%+v t:%+v", tile.Geohash, built.Region, built.Transform)
 
-	absPath := filepath.Join(tilesetsFolder, fn)
+	absPath := filepath.Join(tilesetsFolder, filepath.FromSlash(fn))
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+		return "", nil, fmt.Errorf("create tile model directory: %w", err)
+	}
 	if errW := os.WriteFile(absPath, built.Content, 0644); errW != nil {
 		return "", nil, errW
 	}
