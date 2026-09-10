@@ -17,6 +17,7 @@ require (
 	github.com/sony/sonyflake v1.2.0
 	github.com/spf13/viper v1.19.0
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
+	github.com/twpayne/go-geom v1.6.1
 	github.com/xuri/excelize/v2 v2.9.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/text v0.41.0
