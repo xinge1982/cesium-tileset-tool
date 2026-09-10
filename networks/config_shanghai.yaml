@@ -9,6 +9,22 @@ Postgres:
   DbName: sw_shanghai_g1503_2026
   Schema: public
 
+Minio:
+  BucketPrefix: sw_shanghai_g1503_2026
+
+MinioOutput:
+  Host: ${MINIO_OUTPUT_HOST}
+  Port: ${MINIO_OUTPUT_PORT}
+  AccessKey: ${MINIO_OUTPUT_ACCKEY}
+  SecretKey: ${MINIO_OUTPUT_SECKEY}
+  Bucket: shanghai-g1503
+  PicBucket: shanghai-g1503/images
+  BaseModelBucket: models/baseModels
+  PoleGltfBucket: shanghai-g1503/models/pole_gltf
+  GantryGltfBucket: models/baseModels
+  SignGltfBucket: shanghai-g1503/models/sign
+  DeviceGltfBucket: models/baseModels
+
 Tilesets:
   features:
     name: 设备设施
