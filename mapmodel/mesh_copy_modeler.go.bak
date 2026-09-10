@@ -1,0 +1,531 @@
+package mapmodel
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/qmuntal/gltf"
+	"github.com/qmuntal/gltf/modeler"
+)
+
+/************* 目标文档的基础：单一 Buffer + 4字节对齐写入 *************/
+func ensureSingleBuffer(doc *gltf.Document) int {
+	if len(doc.Buffers) == 0 || doc.Buffers[0] == nil {
+		doc.Buffers = append(doc.Buffers, &gltf.Buffer{Data: []byte{}})
+	}
+	return 0
+}
+func appendBytesAligned(dst *gltf.Document, b []byte) (bufIndex int, byteOffset int) {
+	bufIndex = ensureSingleBuffer(dst)
+	buf := dst.Buffers[bufIndex]
+	off := len(buf.Data)
+	if pad := (4 - (off % 4)) & 3; pad > 0 {
+		buf.Data = append(buf.Data, make([]byte, pad)...)
+		off += pad
+	}
+	buf.Data = append(buf.Data, b...)
+	buf.ByteLength = len(buf.Data)
+	return bufIndex, off
+}
+
+///************* 将强类型数组写成 Accessor 的小工具 *************/
+//func writeF32AsAccessor(dst *gltf.Document, data []float32, comps int, writeMinMax bool) (int, error) {
+//	if comps != 2 && comps != 3 && comps != 4 {
+//		return -1, fmt.Errorf("unsupported comps=%d for float data", comps)
+//	}
+//	raw := make([]byte, len(data)*4)
+//	for i, f := range data {
+//		binary.LittleEndian.PutUint32(raw[i*4:], math.Float32bits(f))
+//	}
+//	bufIdx, off := appendBytesAligned(dst, raw)
+//	dst.BufferViews = append(dst.BufferViews, &gltf.BufferView{
+//		Buffer:     bufIdx,
+//		ByteOffset: off,
+//		ByteLength: len(raw),
+//	})
+//	bvIdx := len(dst.BufferViews) - 1
+//
+//	t := gltf.AccessorVec2
+//	if comps == 3 {
+//		t = gltf.AccessorVec3
+//	} else if comps == 4 {
+//		t = gltf.AccessorVec4
+//	}
+//	acc := &gltf.Accessor{
+//		Type:          t,
+//		ComponentType: gltf.ComponentFloat,
+//		Count:         len(data) / comps,
+//		BufferView:    gltf.Index(bvIdx),
+//		ByteOffset:    0,
+//	}
+//	if writeMinMax && comps == 3 {
+//		min := [3]float64{+1e308, +1e308, +1e308}
+//		max := [3]float64{-1e308, -1e308, -1e308}
+//		for i := 0; i < len(data); i += 3 {
+//			x, y, z := float64(data[i]), float64(data[i+1]), float64(data[i+2])
+//			if x < min[0] {
+//				min[0] = x
+//			}
+//			if y < min[1] {
+//				min[1] = y
+//			}
+//			if z < min[2] {
+//				min[2] = z
+//			}
+//			if x > max[0] {
+//				max[0] = x
+//			}
+//			if y > max[1] {
+//				max[1] = y
+//			}
+//			if z > max[2] {
+//				max[2] = z
+//			}
+//		}
+//		acc.Min = []float64{min[0], min[1], min[2]}
+//		acc.Max = []float64{max[0], max[1], max[2]}
+//	}
+//	dst.Accessors = append(dst.Accessors, acc)
+//	return len(dst.Accessors) - 1, nil
+//}
+
+//func writeU32AsIndices(dst *gltf.Document, idx []uint32) (int, error) {
+//	raw := make([]byte, len(idx)*4)
+//	for i, v := range idx {
+//		binary.LittleEndian.PutUint32(raw[i*4:], v)
+//	}
+//	bufIdx, off := appendBytesAligned(dst, raw)
+//	dst.BufferViews = append(dst.BufferViews, &gltf.BufferView{
+//		Buffer:     bufIdx,
+//		ByteOffset: off,
+//		ByteLength: len(raw),
+//	})
+//	bvIdx := len(dst.BufferViews) - 1
+//
+//	acc := &gltf.Accessor{
+//		Type:          gltf.AccessorScalar,
+//		ComponentType: gltf.ComponentUint, // 统一 32 位索引，省心
+//		Count:         len(idx),
+//		BufferView:    gltf.Index(bvIdx),
+//		ByteOffset:    0,
+//	}
+//	dst.Accessors = append(dst.Accessors, acc)
+//	return len(dst.Accessors) - 1, nil
+//}
+
+/************* 贴图链克隆（Image/Sampler/Texture/Material） *************/
+type matCopier struct {
+	src, dst           *gltf.Document
+	imgMap, samplerMap map[int]int
+	texMap, matMap     map[int]int
+}
+
+func newMatCopier(src, dst *gltf.Document) *matCopier {
+	return &matCopier{
+		src: src, dst: dst,
+		imgMap:     map[int]int{},
+		samplerMap: map[int]int{},
+		texMap:     map[int]int{},
+		matMap:     map[int]int{},
+	}
+}
+
+func (m *matCopier) cloneImage(i int) (int, error) {
+	if ni, ok := m.imgMap[i]; ok {
+		return ni, nil
+	}
+	img := m.src.Images[i]
+	if img == nil {
+		return -1, fmt.Errorf("nil image %d", i)
+	}
+	if img.BufferView == nil {
+		return -1, fmt.Errorf("image %d has no BufferView (expect GLB)", i)
+	}
+	bv := m.src.BufferViews[*img.BufferView]
+	if bv == nil {
+		return -1, fmt.Errorf("invalid image bufferview %d", i)
+	}
+	buf := m.src.Buffers[bv.Buffer]
+	if buf == nil || len(buf.Data) == 0 {
+		return -1, fmt.Errorf("empty buffer for image %d", i)
+	}
+
+	base := bv.ByteOffset
+	end := base + bv.ByteLength
+	if end > len(buf.Data) {
+		return -1, fmt.Errorf("image overflow")
+	}
+	data := buf.Data[base:end]
+
+	bufIdx, off := appendBytesAligned(m.dst, data)
+	m.dst.BufferViews = append(m.dst.BufferViews, &gltf.BufferView{
+		Buffer:     bufIdx,
+		ByteOffset: off,
+		ByteLength: len(data),
+	})
+	newBV := len(m.dst.BufferViews) - 1
+
+	cp := &gltf.Image{
+		BufferView: gltf.Index(newBV),
+		MimeType:   img.MimeType,
+		Name:       img.Name,
+	}
+	m.dst.Images = append(m.dst.Images, cp)
+	newIdx := len(m.dst.Images) - 1
+	m.imgMap[i] = newIdx
+	return newIdx, nil
+}
+
+func (m *matCopier) cloneSampler(i int) (int, error) {
+	if ni, ok := m.samplerMap[i]; ok {
+		return ni, nil
+	}
+	s := m.src.Samplers[i]
+	if s == nil {
+		return -1, fmt.Errorf("nil sampler %d", i)
+	}
+	cp := *s
+	m.dst.Samplers = append(m.dst.Samplers, &cp)
+	newIdx := len(m.dst.Samplers) - 1
+	m.samplerMap[i] = newIdx
+	return newIdx, nil
+}
+func (m *matCopier) cloneTexture(i int) (int, error) {
+
+	if ni, ok := m.texMap[i]; ok {
+		return ni, nil
+	}
+	tx := m.src.Textures[i]
+	if tx == nil {
+		return -1, fmt.Errorf("nil texture %d", i)
+	}
+	cp := *tx
+	if tx.Source != nil {
+		ii, err := m.cloneImage(*tx.Source)
+		if err != nil {
+			return -1, err
+		}
+		cp.Source = gltf.Index(ii)
+	}
+	if tx.Sampler != nil {
+		si, err := m.cloneSampler(*tx.Sampler)
+		if err != nil {
+			return -1, err
+		}
+		cp.Sampler = gltf.Index(si)
+	}
+	m.dst.Textures = append(m.dst.Textures, &cp)
+	newIdx := len(m.dst.Textures) - 1
+	m.texMap[i] = newIdx
+	return newIdx, nil
+}
+func (m *matCopier) cloneMaterial(i int) (int, error) {
+	if ni, ok := m.matMap[i]; ok {
+		return ni, nil
+	}
+	mat := m.src.Materials[i]
+	if mat == nil {
+		return -1, fmt.Errorf("nil material %d", i)
+	}
+	cp := *mat
+	// PBR
+	if mat.PBRMetallicRoughness != nil {
+		mr := *mat.PBRMetallicRoughness
+		if mr.BaseColorTexture != nil {
+			ti, err := m.cloneTexture(mr.BaseColorTexture.Index)
+			if err != nil {
+				return -1, err
+			}
+			t := *mr.BaseColorTexture
+			t.Index = ti
+			mr.BaseColorTexture = &t
+		}
+		if mr.MetallicRoughnessTexture != nil {
+			ti, err := m.cloneTexture(mr.MetallicRoughnessTexture.Index)
+			if err != nil {
+				return -1, err
+			}
+			t := *mr.MetallicRoughnessTexture
+			t.Index = ti
+			mr.MetallicRoughnessTexture = &t
+		}
+		cp.PBRMetallicRoughness = &mr
+	}
+	if mat.NormalTexture != nil && mat.NormalTexture.Index != nil {
+		ti, err := m.cloneTexture(*mat.NormalTexture.Index)
+		if err != nil {
+			return -1, err
+		}
+		t := *mat.NormalTexture
+		t.Index = gltf.Index(ti)
+		cp.NormalTexture = &t
+	}
+	if mat.OcclusionTexture != nil && mat.OcclusionTexture.Index != nil {
+		ti, err := m.cloneTexture(*mat.OcclusionTexture.Index)
+		if err != nil {
+			return -1, err
+		}
+		t := *mat.OcclusionTexture
+		t.Index = gltf.Index(ti)
+		cp.OcclusionTexture = &t
+	}
+	if mat.EmissiveTexture != nil {
+		ti, err := m.cloneTexture(mat.EmissiveTexture.Index)
+		if err != nil {
+			return -1, err
+		}
+		t := *mat.EmissiveTexture
+		t.Index = ti
+		cp.EmissiveTexture = &t
+	}
+	m.dst.Materials = append(m.dst.Materials, &cp)
+	newIdx := len(m.dst.Materials) - 1
+	m.matMap[i] = newIdx
+	return newIdx, nil
+}
+
+/************* 用 modeler 读 → 在 dst 重建一个 primitive *************/
+func rebuildPrimitiveWithModeler(src *gltf.Document, p *gltf.Primitive, dst *gltf.Document) (*gltf.Primitive, error) {
+	if p == nil {
+		return nil, errors.New("nil primitive")
+	}
+	out := &gltf.Primitive{Mode: p.Mode}
+	out.Attributes = make(gltf.PrimitiveAttributes)
+	// POSITION
+	if ai, ok := p.Attributes[gltf.POSITION]; ok {
+		pos, err := modeler.ReadPosition(src, src.Accessors[ai], nil) // [][3]float32
+		if err != nil {
+			return nil, fmt.Errorf("ReadPosition: %w", err)
+		}
+
+		out.Attributes[gltf.POSITION] = modeler.WritePosition(dst, pos)
+	}
+
+	// NORMAL（可选）
+	if ai, ok := p.Attributes[gltf.NORMAL]; ok {
+		nrm, err := modeler.ReadNormal(src, src.Accessors[ai], nil) // [][3]float32
+		if err != nil {
+			return nil, fmt.Errorf("ReadNormal: %w", err)
+		}
+		out.Attributes[gltf.NORMAL] = modeler.WriteNormal(dst, nrm)
+	}
+
+	// TEXCOORD_0（可选）
+	if ai, ok := p.Attributes[gltf.TEXCOORD_0]; ok {
+		uv, err := modeler.ReadTextureCoord(src, src.Accessors[ai], nil) // [][2]float32
+		if err != nil {
+			return nil, fmt.Errorf("ReadTexCoord0: %w", err)
+		}
+
+		out.Attributes[gltf.TEXCOORD_0] = modeler.WriteTextureCoord(dst, uv)
+	}
+	// COLOR_0（可选）
+	if ai, ok := p.Attributes[gltf.COLOR_0]; ok {
+		uv, err := modeler.ReadColor(src, src.Accessors[ai], nil) // [][2]float32
+		if err != nil {
+			return nil, fmt.Errorf("ReadTexCoord0: %w", err)
+		}
+
+		out.Attributes[gltf.COLOR_0] = modeler.WriteColor(dst, uv)
+	}
+
+	// indices（可选）
+	if p.Indices != nil {
+		idx, err := modeler.ReadIndices(src, src.Accessors[*p.Indices], nil) // []uint32
+		if err != nil {
+			return nil, fmt.Errorf("ReadIndices: %w", err)
+		}
+
+		out.Indices = gltf.Index(modeler.WriteIndices(dst, idx))
+	}
+
+	// material（完整克隆见下个函数）
+	out.Material = p.Material
+	return out, nil
+}
+
+//CloneMeshWithModeler
+/************* Mesh 克隆（重建几何 + 克隆材质贴图链） *************/
+func CloneMeshWithModeler(src *gltf.Document, meshIndex int, dst *gltf.Document) (int, error) {
+	if src == nil || dst == nil {
+		return -1, errors.New("nil doc")
+	}
+	if meshIndex < 0 || meshIndex >= len(src.Meshes) || src.Meshes[meshIndex] == nil {
+		return -1, fmt.Errorf("invalid mesh index %d", meshIndex)
+	}
+	ensureSingleBuffer(dst)
+	mc := newMatCopier(src, dst)
+
+	srcMesh := src.Meshes[meshIndex]
+	out := &gltf.Mesh{Name: srcMesh.Name}
+	out.Primitives = make([]*gltf.Primitive, 0, len(srcMesh.Primitives))
+
+	for i, p := range srcMesh.Primitives {
+		if p == nil {
+			continue
+		}
+		np, err := rebuildPrimitiveWithModeler(src, p, dst)
+		if err != nil {
+			return -1, fmt.Errorf("primitive %d: %w", i, err)
+		}
+
+		// 克隆材质链（若有）
+		if p.Material != nil {
+			newMat, err := mc.cloneMaterial(*p.Material)
+			if err != nil {
+				return -1, fmt.Errorf("material %d: %w", *p.Material, err)
+			}
+			np.Material = gltf.Index(newMat)
+		}
+		out.Primitives = append(out.Primitives, np)
+	}
+
+	// morph 权重（直拷）
+	if len(srcMesh.Weights) > 0 {
+		cp := make([]float64, len(srcMesh.Weights))
+		copy(cp, srcMesh.Weights)
+		out.Weights = cp
+	}
+
+	dst.Meshes = append(dst.Meshes, out)
+	return len(dst.Meshes) - 1, nil
+}
+
+/************* 一个最小的装配：把新 mesh 挂一个 node/scene 并写出 *************/
+// 用法示例：
+//  srcDoc, _ := gltf.OpenBinary("a.glb")
+//  dstDoc := &gltf.Document{}
+//  newMeshIdx, _ := CloneMeshWithModeler(srcDoc, 0, dstDoc)
+//  dstDoc.Nodes = append(dstDoc.Nodes, &gltf.Node{ Mesh: gltf.Index(newMeshIdx) })
+//  dstDoc.Scenes = append(dstDoc.Scenes, &gltf.Scene{ Nodes: []uint32{0} })
+//  dstDoc.Scene = gltf.Index(0)
+//  _ = gltf.SaveBinary(dstDoc, "out.glb")
+
+/************* Mesh 克隆（重建几何 + 克隆材质贴图链） *************/
+func cloneMesh(src *gltf.Document, meshIndex int, dst *gltf.Document, fidx int) (int, error) {
+	if src == nil || dst == nil {
+		return -1, errors.New("nil doc")
+	}
+	if meshIndex < 0 || meshIndex >= len(src.Meshes) || src.Meshes[meshIndex] == nil {
+		return -1, fmt.Errorf("invalid mesh index %d", meshIndex)
+	}
+	ensureSingleBuffer(dst)
+	mc := newMatCopier(src, dst)
+
+	srcMesh := src.Meshes[meshIndex]
+	out := &gltf.Mesh{Name: srcMesh.Name}
+	out.Primitives = make([]*gltf.Primitive, 0, len(srcMesh.Primitives))
+
+	for i, p := range srcMesh.Primitives {
+		if p == nil {
+			continue
+		}
+		np, err := clonePrimitive(src, p, dst, fidx)
+		if err != nil {
+			return -1, fmt.Errorf("primitive %d: %w", i, err)
+		}
+
+		// 克隆材质链（若有）
+		if p.Material != nil {
+			newMat, err := mc.cloneMaterial(*p.Material)
+			if err != nil {
+				return -1, fmt.Errorf("material %d: %w", *p.Material, err)
+			}
+			np.Material = gltf.Index(newMat)
+		}
+		out.Primitives = append(out.Primitives, np)
+	}
+
+	// morph 权重（直拷）
+	if len(srcMesh.Weights) > 0 {
+		cp := make([]float64, len(srcMesh.Weights))
+		copy(cp, srcMesh.Weights)
+		out.Weights = cp
+	}
+
+	dst.Meshes = append(dst.Meshes, out)
+	return len(dst.Meshes) - 1, nil
+}
+
+/************* 用 modeler 读 → 在 dst 重建一个 primitive *************/
+
+func clonePrimitive(src *gltf.Document, p *gltf.Primitive, dst *gltf.Document, fidx int) (*gltf.Primitive, error) {
+	if p == nil {
+		return nil, errors.New("nil primitive")
+	}
+	out := &gltf.Primitive{Mode: p.Mode}
+	out.Attributes = make(gltf.PrimitiveAttributes)
+	// POSITION
+	if ai, ok := p.Attributes[gltf.POSITION]; ok {
+		pos, err := modeler.ReadPosition(src, src.Accessors[ai], nil) // [][3]float32
+		if err != nil {
+			return nil, fmt.Errorf("ReadPosition: %w", err)
+		}
+
+		out.Attributes[gltf.POSITION] = modeler.WritePosition(dst, pos)
+
+		if fidx != -1 {
+			//添加属性
+			feat := make([]uint16, len(pos))
+			for j := range feat {
+				feat[j] = uint16(fidx) // 你的 feature 行号
+			}
+			featAcc := modeler.WriteAccessor(dst, gltf.TargetArrayBuffer, feat)
+			out.Attributes["_FEATURE_ID_0"] = featAcc
+
+			out.Extensions = map[string]interface{}{
+				"EXT_mesh_features": map[string]interface{}{
+					"featureIds": []map[string]interface{}{
+						{
+							"attribute":     0, // _FEATURE_ID_0
+							"propertyTable": 0,
+						},
+					},
+				},
+			}
+		}
+
+	}
+
+	// NORMAL（可选）
+	if ai, ok := p.Attributes[gltf.NORMAL]; ok {
+		nrm, err := modeler.ReadNormal(src, src.Accessors[ai], nil) // [][3]float32
+		if err != nil {
+			return nil, fmt.Errorf("ReadNormal: %w", err)
+		}
+		out.Attributes[gltf.NORMAL] = modeler.WriteNormal(dst, nrm)
+	}
+
+	// TEXCOORD_0（可选）
+	if ai, ok := p.Attributes[gltf.TEXCOORD_0]; ok {
+		uv, err := modeler.ReadTextureCoord(src, src.Accessors[ai], nil) // [][2]float32
+		if err != nil {
+			return nil, fmt.Errorf("ReadTexCoord0: %w", err)
+		}
+
+		out.Attributes[gltf.TEXCOORD_0] = modeler.WriteTextureCoord(dst, uv)
+	}
+	// COLOR_0（可选）
+	if ai, ok := p.Attributes[gltf.COLOR_0]; ok {
+		uv, err := modeler.ReadColor(src, src.Accessors[ai], nil) // [][2]float32
+		if err != nil {
+			return nil, fmt.Errorf("ReadTexCoord0: %w", err)
+		}
+
+		out.Attributes[gltf.COLOR_0] = modeler.WriteColor(dst, uv)
+	}
+
+	// indices（可选）
+	if p.Indices != nil {
+		idx, err := modeler.ReadIndices(src, src.Accessors[*p.Indices], nil) // []uint32
+		if err != nil {
+			return nil, fmt.Errorf("ReadIndices: %w", err)
+		}
+
+		out.Indices = gltf.Index(modeler.WriteIndices(dst, idx))
+	}
+
+	// material（完整克隆见下个函数）
+	out.Material = p.Material
+	return out, nil
+}

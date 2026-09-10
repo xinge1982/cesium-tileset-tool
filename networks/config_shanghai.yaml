@@ -1,0 +1,402 @@
+Desc: sw_shanghai_g1503_2026
+Bound: 121.7579,31.0875,121.7842,31.1601
+
+Postgres:
+  Host: ${POSTGRES_HOST}
+  Port: ${POSTGRES_PORT}
+  User: ${POSTGRES_USER}
+  Pass: ${POSTGRES_PASSWORD}
+  DbName: sw_shanghai_g1503_2026
+  Schema: public
+
+Tilesets:
+  features:
+    name: 设备设施
+    url: https://47.104.194.94:28199/share/networks/network_shanghai_g1503_2026/tilesets/features/tileset.json
+    type: features
+    enabled: true
+    maintainable: true
+    order: 1
+    feature:
+      idField: id
+      sourceField: id
+    sources:
+      - id: sign
+        name: 标志牌
+
+        match:
+          operator: prefix
+          value: hdtraffic_sign
+
+        keyMapping:
+          operator: removePrefix
+          value: hdtraffic_sign.
+
+        table:
+          schema: public
+          name: hdtraffic_sign
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: false
+            submit: false
+
+          - name: bz
+            label: 备注
+            detail: true
+            list: true
+            search: true
+            editable: true
+            submit: true
+            storage:
+              type: varchar
+              column: bz
+              autoCreate: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+
+      - id: device
+        name: 设备
+
+        match:
+          operator: prefix
+          value: hdtraffic_ene
+
+        keyMapping:
+          operator: removePrefix
+          value: hdtraffic_ene.
+
+        table:
+          schema: public
+          name: hdtraffic_ene
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: false
+            submit: false
+
+          - name: bz
+            label: 备注
+            detail: true
+            list: true
+            search: true
+            editable: true
+            submit: true
+            storage:
+              type: varchar
+              column: bz
+              autoCreate: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+
+      - id: gantry
+        name: 门架
+
+        match:
+          operator: prefix
+          value: hdgantry
+
+        keyMapping:
+          operator: removePrefix
+          value: hdgantry.
+
+        table:
+          schema: public
+          name: hdgantry
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: false
+            submit: false
+
+          - name: bz
+            label: 备注
+            detail: true
+            list: true
+            search: true
+            editable: true
+            submit: true
+            storage:
+              type: varchar
+              column: bz
+              autoCreate: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+
+      - id: pole
+        name: 标志杆
+
+        match:
+          operator: prefix
+          value: hdpole
+
+        keyMapping:
+          operator: removePrefix
+          value: hdpole.
+
+        table:
+          schema: public
+          name: hdpole
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: false
+            submit: false
+
+          - name: bz
+            label: 备注
+            detail: true
+            list: true
+            search: true
+            editable: true
+            submit: true
+            storage:
+              type: varchar
+              column: bz
+              autoCreate: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+
+  buildings:
+    name: 建筑
+    url: https://tileset.amap3d.online:48611/share/shanghai_g1503/features/tileset.json
+    type: features
+    enabled: true
+    maintainable: true
+    order: 3
+    feature:
+      idField: id
+      sourceField: id
+    sources:
+      - id: station
+        name: 收费站顶棚
+
+        match:
+          operator: prefix
+          value: hdroad_side_facility
+
+        keyMapping:
+          operator: removePrefix
+          value: hdroad_side_facility.
+
+        table:
+          schema: public
+          name: hdroad_side_facility
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: bz
+            label: 备注
+            detail: true
+            list: true
+            search: true
+            editable: true
+            submit: true
+            storage:
+              type: varchar
+              column: bz
+              autoCreate: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+      - id: render_toll
+        name: 收费站立柱
+
+        match:
+          operator: prefix
+          value: render_toll_building
+
+        keyMapping:
+          operator: removePrefix
+          value: render_toll_building.
+
+        table:
+          schema: public
+          name: render_toll_building
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: bz
+            label: 备注
+            detail: true
+            list: true
+            search: true
+            editable: true
+            submit: true
+            storage:
+              type: varchar
+              column: bz
+              autoCreate: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+      - id: toll_name
+        name: 收费站名牌
+
+        match:
+          operator: prefix
+          value: toll_name
+
+        keyMapping:
+          operator: removePrefix
+          value: toll_name.
+
+        table:
+          schema: public
+          name: toll_name
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: bz
+            label: 备注
+            detail: true
+            list: true
+            search: true
+            editable: true
+            submit: true
+            storage:
+              type: varchar
+              column: bz
+              autoCreate: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+    options:
+      - ["modelForwardAxis","Y"]
+      - ["modelUpAxis", "Z"]
+
+ImageTile: https://webst01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=6&x={x}&y={y}&z={z}
+
+NetworkFolder: ./networks/network_shanghai_g1503_2026
+
+PhotoFileList:
+  LeftSideTable: aa_qj_3
+  RightSideTable: aa_qj_4
+  ImageSortField: timestamp
+  ImageUrlField: url
+  ImageUrlPath: http://43.247.250.114:35005/shanghai_g1503/photo/
