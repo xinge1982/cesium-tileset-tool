@@ -114,6 +114,7 @@
         <button id="camera-button" type="button" @click="debugCameraPosition">相机参数</button>
         <el-switch
             v-model="lodDebugEnabled"
+            class="lod-debug-switch"
             active-text="LOD调试"
             @change="setLODDebugEnabled"
         />
@@ -1174,6 +1175,14 @@ onBeforeUnmount(() => {
 
 .layer-error {
   color: #f56c6c;
+}
+
+.lod-debug-switch :deep(.el-switch__label) {
+  color: #dce7eb;
+}
+
+.lod-debug-switch :deep(.el-switch__label.is-active) {
+  color: #75e8cf;
 }
 
 .lod-debug-panel {

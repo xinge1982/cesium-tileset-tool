@@ -129,6 +129,9 @@ export class TilesetManager {
   public setLODDebugEnabled(enabled: boolean, listener?: LODDebugListener): void {
     this.lodDebugEnabled = enabled
     if (listener) this.lodDebugListener = listener
+    for (const entry of this.entries.values()) {
+      this.applyCesiumLODDebugSettings(entry.tileset, enabled)
+    }
     if (!enabled) this.visibleLODContents.clear()
     this.emitVisibleLODContents()
     this.viewer.scene.requestRender()
@@ -244,6 +247,7 @@ export class TilesetManager {
       )
       entry.tileset = tileset
       tileset.show = entry.state.visible
+      this.applyCesiumLODDebugSettings(tileset, this.lodDebugEnabled)
       this.viewer.scene.primitives.add(tileset)
 
       if (entry.state.allowZClip) {
@@ -286,6 +290,16 @@ export class TilesetManager {
       edgeColor: Cesium.Color.YELLOW,
       edgeWidth: 1,
     })
+  }
+
+  private applyCesiumLODDebugSettings(
+      tileset: Cesium.Cesium3DTileset | undefined,
+      enabled: boolean,
+  ): void {
+    if (!tileset || tileset.isDestroyed()) return
+    tileset.debugShowUrl = enabled
+    tileset.debugShowGeometricError = enabled
+    tileset.debugColorizeTiles = enabled
   }
 
   private applyHighlight(tilesetKey: string, feature: FeatureLike): void {
