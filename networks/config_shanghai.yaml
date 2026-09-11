@@ -29,13 +29,13 @@ LOD:
   Enabled: true
   LOD0:
     ModelFolder: lod0
-    GeometricError: 3.5
+    GeometricError: 4.0
   LOD1:
     ModelFolder: lod1
-    GeometricError: 1.75
+    GeometricError: 1.2
   LOD2:
     ModelFolder: lod2
-    GeometricError: 0.875
+    GeometricError: 0.6
   LOD3:
     GeometricError: 0
 

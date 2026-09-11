@@ -299,7 +299,6 @@ export class TilesetManager {
     if (!tileset || tileset.isDestroyed()) return
     tileset.debugShowUrl = enabled
     tileset.debugShowGeometricError = enabled
-    tileset.debugColorizeTiles = enabled
   }
 
   private applyHighlight(tilesetKey: string, feature: FeatureLike): void {
