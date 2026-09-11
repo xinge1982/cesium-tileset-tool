@@ -100,6 +100,19 @@ type PhotoListQueryOption struct {
 	ImageUrlPath   string
 }
 
+type TilesetLODLevelConfig struct {
+	ModelFolder    string
+	GeometricError float64
+}
+
+type TilesetLODConfig struct {
+	Enabled bool
+	LOD0    TilesetLODLevelConfig
+	LOD1    TilesetLODLevelConfig
+	LOD2    TilesetLODLevelConfig
+	LOD3    TilesetLODLevelConfig
+}
+
 type Config struct {
 	ManHttpsPort    string                   //服务端口
 	Name            string                   //配置名称
@@ -119,6 +132,7 @@ type Config struct {
 	Bound           string                   //项目范围
 	Tilesets        map[string]TilesetConfig //三维tileset
 	ImageTile       interface{}              //影像瓦片地址
+	LOD             TilesetLODConfig         //多级模型及切片参数
 	CardApis        []struct {
 		Url string
 	}
@@ -360,6 +374,7 @@ func viperConfig() *Config {
 	yaml.SetDefault("CertFilePath", "cert")
 	yaml.SetDefault("HttpDebug", false)
 	yaml.SetDefault("EnableAutoTilesetRebuild", true)
+	setTilesetLODDefaults(yaml)
 	yaml.SetDefault("Postgres", map[string]interface{}{
 		"Host":   "localhost",
 		"Port":   "5432",
@@ -459,6 +474,7 @@ func GetNetworkConfig(fn string) (*Config, error) {
 	yaml.SetDefault("Debug", false)
 	yaml.SetDefault("HttpDebug", false)
 	yaml.SetDefault("PublishToList", true)
+	setTilesetLODDefaults(yaml)
 	yaml.SetDefault("Postgres", map[string]interface{}{
 		"Host":   "localhost",
 		"Port":   "5432",
@@ -535,6 +551,17 @@ func GetNetworkConfig(fn string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func setTilesetLODDefaults(yaml *viper.Viper) {
+	yaml.SetDefault("LOD.Enabled", true)
+	yaml.SetDefault("LOD.LOD0.ModelFolder", "lod0")
+	yaml.SetDefault("LOD.LOD0.GeometricError", 200.0)
+	yaml.SetDefault("LOD.LOD1.ModelFolder", "lod1")
+	yaml.SetDefault("LOD.LOD1.GeometricError", 80.0)
+	yaml.SetDefault("LOD.LOD2.ModelFolder", "lod2")
+	yaml.SetDefault("LOD.LOD2.GeometricError", 25.0)
+	yaml.SetDefault("LOD.LOD3.GeometricError", 0.0)
 }
 
 func (c *Config) GetMinioBucket(name string) string {
