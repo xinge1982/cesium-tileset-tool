@@ -112,6 +112,11 @@
         <button id="default-view-button" type="button" class="primary" @click="flyToDefaultView">默认视角</button>
         <button id="globe-button" type="button" @click="toggleGlobe">{{ globeVisible ? '隐藏地球' : '显示地球' }}</button>
         <button id="camera-button" type="button" @click="debugCameraPosition">相机参数</button>
+        <el-switch
+            v-model="lodDebugEnabled"
+            active-text="LOD调试"
+            @change="setLODDebugEnabled"
+        />
         <button id="help-button" type="button" @click="startHelpTour()">帮助</button>
         <span class="scene-status">{{ sceneStatus }}</span>
       </div>
@@ -162,12 +167,36 @@
         />
       </aside>
 
+      <aside v-if="lodDebugEnabled" class="lod-debug-panel">
+        <div class="lod-debug-title">当前可见 LOD</div>
+        <div class="lod-debug-counts">
+          <span v-for="(count, lod) in visibleLODCounts" :key="lod">
+            LOD{{ lod }} <b>{{ count }}</b>
+          </span>
+        </div>
+        <div v-if="visibleLODContents.length" class="lod-debug-files">
+          <div
+              v-for="item in visibleLODContents"
+              :key="`${item.layerKey}|${item.uri}`"
+              class="lod-debug-file"
+              :title="item.uri"
+          >
+            <b>LOD{{ item.lod }}</b>
+            <span>{{ item.layerName }}</span>
+            <code>{{ item.fileName }}</code>
+          </div>
+        </div>
+        <span v-else class="lod-debug-empty">当前视图没有可见的 LOD GLB</span>
+      </aside>
+
 
       <div class="mouse-coordinates">
         <span>经度 <b>{{ mouseLongitude }}</b></span>
         <span>纬度 <b>{{ mouseLatitude }}</b></span>
         <span>高程 <b>{{ mouseAltitude }}</b></span>
         <span>拾取距离 <b>{{ mousePickDistance }}</b></span>
+        <span v-if="lodDebugEnabled">LOD <b>{{ pickedLOD }}</b></span>
+        <span v-if="lodDebugEnabled">文件 <b>{{ pickedLODFile }}</b></span>
       </div>
     </section>
 
@@ -252,6 +281,7 @@ import http from './api/http'
 import {isNullOrEmpty} from './hooks/use-common'
 import {
   TilesetManager,
+  type LODDebugInfo,
   type ManagedTileset,
   type TilesetConfig,
 } from './modules/tileset-manager'
@@ -261,6 +291,11 @@ const mouseLongitude = ref('—')
 const mouseLatitude = ref('—')
 const mouseAltitude = ref('—')
 const mousePickDistance = ref('—')
+const lodDebugEnabled = ref(false)
+const pickedLOD = ref('—')
+const pickedLODFile = ref('—')
+const visibleLODContents = ref<LODDebugInfo[]>([])
+const visibleLODCounts = ref([0, 0, 0, 0])
 const globeVisible = ref(true)
 const searchKeyword = ref('')
 const searchLoading = ref(false)
@@ -785,7 +820,7 @@ async function focusSearchResult(item: any) {
 
 interface StablePickResult {
   position: Cesium.Cartesian3
-  pickedObject: boolean
+  pickedObject?: unknown
 }
 
 function pickPositionStable(screenPosition: Cesium.Cartesian2): StablePickResult | undefined {
@@ -796,13 +831,13 @@ function pickPositionStable(screenPosition: Cesium.Cartesian2): StablePickResult
     if (picked && scene.pickPositionSupported) {
       const position = scene.pickPosition(screenPosition)
       if (Cesium.defined(position)) {
-        return { position, pickedObject: true }
+        return { position, pickedObject: picked }
       }
     }
     const ray = viewer.camera.getPickRay(screenPosition)
     const position = ray ? scene.globe.pick(ray, scene) : undefined
     return Cesium.defined(position)
-      ? { position, pickedObject: false }
+      ? { position }
       : undefined
   } catch {
     return undefined
@@ -815,6 +850,8 @@ function updateMouseCoordinates(result?: StablePickResult) {
     mouseLatitude.value = '—'
     mouseAltitude.value = '—'
     mousePickDistance.value = '—'
+    pickedLOD.value = '—'
+    pickedLODFile.value = '—'
     return
   }
   const position = result.position
@@ -825,12 +862,37 @@ function updateMouseCoordinates(result?: StablePickResult) {
 
   if (!viewer || !result.pickedObject) {
     mousePickDistance.value = '—'
+    pickedLOD.value = '—'
+    pickedLODFile.value = '—'
     return
   }
   const distance = Cesium.Cartesian3.distance(viewer.camera.positionWC, position)
   mousePickDistance.value = Number.isFinite(distance)
     ? `${distance.toFixed(2)} m`
     : '—'
+
+  const lodInfo = lodDebugEnabled.value
+    ? tilesetManager?.getPickedLODDebugInfo(result.pickedObject)
+    : undefined
+  pickedLOD.value = lodInfo ? `LOD${lodInfo.lod}` : '—'
+  pickedLODFile.value = lodInfo?.fileName ?? '—'
+}
+
+function updateVisibleLODContents(contents: LODDebugInfo[]) {
+  visibleLODContents.value = contents
+  const counts = [0, 0, 0, 0]
+  for (const content of contents) counts[content.lod] += 1
+  visibleLODCounts.value = counts
+}
+
+function setLODDebugEnabled(enabled: unknown) {
+  const value = Boolean(enabled)
+  lodDebugEnabled.value = value
+  if (!value) {
+    pickedLOD.value = '—'
+    pickedLODFile.value = '—'
+  }
+  tilesetManager?.setLODDebugEnabled(value, updateVisibleLODContents)
 }
 
 function toggleGlobe() {
@@ -942,6 +1004,7 @@ onMounted(() => {
   }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
 
   tilesetManager = new TilesetManager(viewer)
+  tilesetManager.setLODDebugEnabled(lodDebugEnabled.value, updateVisibleLODContents)
   sceneStatus.value = '场景已初始化'
   flyToDefaultView()
 
@@ -1111,6 +1174,78 @@ onBeforeUnmount(() => {
 
 .layer-error {
   color: #f56c6c;
+}
+
+.lod-debug-panel {
+  position: absolute;
+  z-index: 25;
+  right: 14px;
+  bottom: 14px;
+  width: 330px;
+  max-height: 42vh;
+  padding: 10px 12px;
+  overflow: hidden;
+  color: #dce7eb;
+  background: rgba(6, 14, 19, .9);
+  border: 1px solid rgba(117, 232, 207, .35);
+  border-radius: 8px;
+  box-shadow: 0 5px 18px rgba(0, 0, 0, .3);
+  backdrop-filter: blur(7px);
+  font-size: 12px;
+}
+
+.lod-debug-title {
+  margin-bottom: 8px;
+  color: #75e8cf;
+  font-weight: 600;
+}
+
+.lod-debug-counts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.lod-debug-counts span {
+  padding: 4px;
+  text-align: center;
+  background: rgba(255, 255, 255, .07);
+  border-radius: 4px;
+}
+
+.lod-debug-counts b,
+.lod-debug-file b {
+  color: #75e8cf;
+}
+
+.lod-debug-files {
+  max-height: calc(42vh - 82px);
+  overflow-y: auto;
+}
+
+.lod-debug-file {
+  display: grid;
+  grid-template-columns: 44px minmax(70px, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  padding: 4px 0;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+}
+
+.lod-debug-file span,
+.lod-debug-file code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lod-debug-file code {
+  color: #f0c674;
+}
+
+.lod-debug-empty {
+  color: #909399;
 }
 
 .search-panel {

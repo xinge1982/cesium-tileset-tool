@@ -36,6 +36,16 @@ export interface HighlightFeatureRequest {
   position?: Cesium.Cartesian3
 }
 
+export interface LODDebugInfo {
+  layerKey: string
+  layerName: string
+  lod: number
+  fileName: string
+  uri: string
+}
+
+export type LODDebugListener = (visibleContents: LODDebugInfo[]) => void
+
 const HIGHLIGHT_BILLBOARD_IMAGE = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
   <svg xmlns="http://www.w3.org/2000/svg" width="40" height="52" viewBox="0 0 40 52">
     <path d="M20 1C9.5 1 1 9.5 1 20c0 14.5 19 31 19 31s19-16.5 19-31C39 9.5 30.5 1 20 1z" fill="#ff3b30" stroke="#fff" stroke-width="2"/>
@@ -49,6 +59,12 @@ type FeatureLike = {
 }
 
 type TileContentLike = {
+  url?: string
+  uri?: string
+  _url?: string
+  _resource?: { url?: string }
+  model?: object
+  _model?: object
   featuresLength?: number
   getFeature?: (index: number) => FeatureLike
   innerContents?: unknown[]
@@ -68,6 +84,11 @@ export class TilesetManager {
   private readonly highlightedFeatures = new Set<FeatureLike>()
   private highlightRequest: HighlightFeatureRequest | null = null
   private highlightBillboard: Cesium.Entity | null = null
+  private lodDebugEnabled = false
+  private lodDebugListener: LODDebugListener | null = null
+  private visibleLODFrame = -1
+  private readonly visibleLODContents = new Map<string, LODDebugInfo>()
+  private readonly lodInfoByObject = new WeakMap<object, LODDebugInfo>()
 
   public constructor(private readonly viewer: Cesium.Viewer) {}
 
@@ -105,6 +126,29 @@ export class TilesetManager {
     return Array.from(this.entries.values(), entry => entry.state)
   }
 
+  public setLODDebugEnabled(enabled: boolean, listener?: LODDebugListener): void {
+    this.lodDebugEnabled = enabled
+    if (listener) this.lodDebugListener = listener
+    if (!enabled) this.visibleLODContents.clear()
+    this.emitVisibleLODContents()
+    this.viewer.scene.requestRender()
+  }
+
+  public getPickedLODDebugInfo(picked: unknown): LODDebugInfo | undefined {
+    if (!this.lodDebugEnabled || !picked || typeof picked !== 'object') return undefined
+
+    const pickedObject = picked as { content?: unknown; primitive?: unknown }
+    const primitive = pickedObject.primitive as { content?: unknown } | undefined
+    const candidates = [picked, pickedObject.content, primitive, primitive?.content]
+    for (const candidate of candidates) {
+      if (candidate && typeof candidate === 'object') {
+        const info = this.lodInfoByObject.get(candidate)
+        if (info) return info
+      }
+    }
+    return undefined
+  }
+
   public setVisible(tilesetKey: string, visible: boolean): void {
     const entry = this.entries.get(tilesetKey)
     if (!entry) return
@@ -112,6 +156,12 @@ export class TilesetManager {
     entry.state.visible = visible
     if (entry.tileset && !entry.tileset.isDestroyed()) {
       entry.tileset.show = visible
+    }
+    if (!visible) {
+      for (const [key, info] of this.visibleLODContents) {
+        if (info.layerKey === tilesetKey) this.visibleLODContents.delete(key)
+      }
+      this.emitVisibleLODContents()
     }
     this.viewer.scene.requestRender()
   }
@@ -178,6 +228,8 @@ export class TilesetManager {
       entry.features.clear()
     }
     this.entries.clear()
+    this.visibleLODContents.clear()
+    this.emitVisibleLODContents()
   }
 
   private async load(config: TilesetConfig, entry: ManagedEntry): Promise<void> {
@@ -199,6 +251,7 @@ export class TilesetManager {
       }
 
       tileset.tileVisible.addEventListener((tile: unknown) => {
+        if (this.lodDebugEnabled) this.trackVisibleLODContents(entry, tile)
         for (const content of this.getFeatureContents(tile)) {
           const featuresLength = content.featuresLength ?? 0
           for (let index = 0; index < featuresLength; index += 1) {
@@ -367,6 +420,105 @@ export class TilesetManager {
     if (!this.highlightBillboard) return
     this.viewer.entities.remove(this.highlightBillboard)
     this.highlightBillboard = null
+  }
+
+  private trackVisibleLODContents(entry: ManagedEntry, tile: unknown): void {
+    const frameNumber = Number(
+      (this.viewer.scene as unknown as { frameState?: { frameNumber?: number } })
+        .frameState?.frameNumber ?? -1,
+    )
+    if (frameNumber !== this.visibleLODFrame) {
+      this.visibleLODFrame = frameNumber
+      this.visibleLODContents.clear()
+    }
+
+    const tileObject = tile && typeof tile === 'object' ? tile as object : undefined
+    const contents = this.getAllTileContents(tile)
+    let firstInfo: LODDebugInfo | undefined
+    for (const content of contents) {
+      const uri = this.getTileContentUri(tile, content)
+      const info = this.parseLODInfo(entry, uri)
+      if (!info) continue
+
+      firstInfo ??= info
+      this.visibleLODContents.set(`${entry.state.key}|${info.uri}`, info)
+      this.lodInfoByObject.set(content, info)
+
+      const typedContent = content as TileContentLike
+      if (typedContent.model) this.lodInfoByObject.set(typedContent.model, info)
+      if (typedContent._model) this.lodInfoByObject.set(typedContent._model, info)
+      const featuresLength = typedContent.featuresLength ?? 0
+      for (let index = 0; index < featuresLength; index += 1) {
+        const feature = typedContent.getFeature?.(index)
+        if (feature && typeof feature === 'object') {
+          this.lodInfoByObject.set(feature, info)
+        }
+      }
+    }
+    if (tileObject && firstInfo) this.lodInfoByObject.set(tileObject, firstInfo)
+    this.emitVisibleLODContents()
+  }
+
+  private emitVisibleLODContents(): void {
+    this.lodDebugListener?.(
+      Array.from(this.visibleLODContents.values()).sort((left, right) =>
+        left.lod - right.lod || left.uri.localeCompare(right.uri),
+      ),
+    )
+  }
+
+  private parseLODInfo(entry: ManagedEntry, uri: string): LODDebugInfo | undefined {
+    if (!uri) return undefined
+    let decoded = uri
+    try {
+      decoded = decodeURIComponent(uri)
+    } catch {
+      // Keep the original URL if it contains malformed escape sequences.
+    }
+    const path = decoded.split(/[?#]/, 1)[0]
+    const match = path.match(/(?:^|\/)(lod([0-3])\.glb)$/i)
+    if (!match) return undefined
+    return {
+      layerKey: entry.state.key,
+      layerName: entry.state.name,
+      lod: Number(match[2]),
+      fileName: match[1],
+      uri,
+    }
+  }
+
+  private getTileContentUri(tile: unknown, content: object): string {
+    const typedContent = content as TileContentLike
+    const typedTile = tile as {
+      _header?: { content?: { uri?: string; url?: string } }
+    }
+    const candidates = [
+      typedContent.url,
+      typedContent.uri,
+      typedContent._url,
+      typedContent._resource?.url,
+      typedTile?._header?.content?.uri,
+      typedTile?._header?.content?.url,
+    ]
+    return candidates.find(value => typeof value === 'string' && value.length > 0) ?? ''
+  }
+
+  private getAllTileContents(tile: unknown): object[] {
+    const content = (tile as { content?: unknown })?.content
+    return this.flattenTileContents(content)
+  }
+
+  private flattenTileContents(content: unknown): object[] {
+    if (!content || typeof content !== 'object') return []
+    const typedContent = content as TileContentLike
+    const innerContents = Array.isArray(typedContent.innerContents)
+      ? typedContent.innerContents
+      : Array.isArray(typedContent._contents)
+        ? typedContent._contents
+        : []
+    return innerContents.length > 0
+      ? innerContents.flatMap(inner => this.flattenTileContents(inner))
+      : [content]
   }
 
   private getFeatureContents(tile: unknown): TileContentLike[] {
