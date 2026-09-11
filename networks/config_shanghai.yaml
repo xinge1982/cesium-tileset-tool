@@ -29,13 +29,13 @@ LOD:
   Enabled: true
   LOD0:
     ModelFolder: lod0
-    GeometricError: 100
+    GeometricError: 3.5
   LOD1:
     ModelFolder: lod1
-    GeometricError: 40
+    GeometricError: 1.75
   LOD2:
     ModelFolder: lod2
-    GeometricError: 16
+    GeometricError: 0.875
   LOD3:
     GeometricError: 0
 
@@ -419,6 +419,7 @@ Tilesets:
     options:
       - ["modelForwardAxis","Y"]
       - ["modelUpAxis", "Z"]
+      - ["maximumScreenSpaceError", "16"]
 
   roadsurface:
     name: 道路面

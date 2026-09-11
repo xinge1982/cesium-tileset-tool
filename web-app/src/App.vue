@@ -167,6 +167,7 @@
         <span>经度 <b>{{ mouseLongitude }}</b></span>
         <span>纬度 <b>{{ mouseLatitude }}</b></span>
         <span>高程 <b>{{ mouseAltitude }}</b></span>
+        <span>拾取距离 <b>{{ mousePickDistance }}</b></span>
       </div>
     </section>
 
@@ -259,6 +260,7 @@ const sceneStatus = ref('正在初始化')
 const mouseLongitude = ref('—')
 const mouseLatitude = ref('—')
 const mouseAltitude = ref('—')
+const mousePickDistance = ref('—')
 const globeVisible = ref(true)
 const searchKeyword = ref('')
 const searchLoading = ref(false)
@@ -781,33 +783,54 @@ async function focusSearchResult(item: any) {
   }
 }
 
-function pickPositionStable(screenPosition: Cesium.Cartesian2) {
+interface StablePickResult {
+  position: Cesium.Cartesian3
+  pickedObject: boolean
+}
+
+function pickPositionStable(screenPosition: Cesium.Cartesian2): StablePickResult | undefined {
   if (!viewer) return undefined
   const scene = viewer.scene
   try {
     const picked = scene.pick(screenPosition)
     if (picked && scene.pickPositionSupported) {
       const position = scene.pickPosition(screenPosition)
-      if (Cesium.defined(position)) return position
+      if (Cesium.defined(position)) {
+        return { position, pickedObject: true }
+      }
     }
     const ray = viewer.camera.getPickRay(screenPosition)
-    return ray ? scene.globe.pick(ray, scene) : undefined
+    const position = ray ? scene.globe.pick(ray, scene) : undefined
+    return Cesium.defined(position)
+      ? { position, pickedObject: false }
+      : undefined
   } catch {
     return undefined
   }
 }
 
-function updateMouseCoordinates(position?: Cesium.Cartesian3) {
-  if (!Cesium.defined(position)) {
+function updateMouseCoordinates(result?: StablePickResult) {
+  if (!result || !Cesium.defined(result.position)) {
     mouseLongitude.value = '—'
     mouseLatitude.value = '—'
     mouseAltitude.value = '—'
+    mousePickDistance.value = '—'
     return
   }
+  const position = result.position
   const cartographic = Cesium.Cartographic.fromCartesian(position)
   mouseLongitude.value = `${Cesium.Math.toDegrees(cartographic.longitude).toFixed(8)}°`
   mouseLatitude.value = `${Cesium.Math.toDegrees(cartographic.latitude).toFixed(8)}°`
   mouseAltitude.value = `${cartographic.height.toFixed(3)} m`
+
+  if (!viewer || !result.pickedObject) {
+    mousePickDistance.value = '—'
+    return
+  }
+  const distance = Cesium.Cartesian3.distance(viewer.camera.positionWC, position)
+  mousePickDistance.value = Number.isFinite(distance)
+    ? `${distance.toFixed(2)} m`
+    : '—'
 }
 
 function toggleGlobe() {
