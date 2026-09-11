@@ -30,6 +30,20 @@ func TestTileModelRelativePath(t *testing.T) {
 	}
 }
 
+func TestGeoHashModelGroupKeyIncludesTableName(t *testing.T) {
+	first := &GeoHashModel{TableName: "hdtraffic_sign", Model: "shared.glb"}
+	second := &GeoHashModel{TableName: "hdpole", Model: "shared.glb"}
+	models := make(map[string][]*GeoHashModel)
+	appendGeoHashModelsByGroup(models, first, second)
+
+	if len(models) != 2 {
+		t.Fatalf("models with the same file name from different tables must use separate groups: %+v", models)
+	}
+	if len(models["hdtraffic_sign|shared.glb"]) != 1 || len(models["hdpole|shared.glb"]) != 1 {
+		t.Fatal("unexpected TableName|Model grouping keys")
+	}
+}
+
 func TestEnsureLocalLODModelDirectories(t *testing.T) {
 	cfg := &config.Config{NetworkFolder: t.TempDir()}
 	levels := []tileLODLevel{
@@ -103,15 +117,16 @@ func TestLoadLocalLODModelsUsesDatabaseModelPath(t *testing.T) {
 
 	cfg := &config.Config{NetworkFolder: networkFolder}
 	level := tileLODLevel{Level: 1, ModelFolder: "lod1", GeometricError: 80}
-	original := &GeoHashModel{Id: "1", Model: "bridge/simple.glb", Gltf: &GltfModel{Content: []byte("minio-lod3")}}
-	source := map[string][]*GeoHashModel{"bridge/simple.glb": []*GeoHashModel{original}}
+	original := &GeoHashModel{Id: "1", TableName: "hdgantry", Model: "bridge/simple.glb", Gltf: &GltfModel{Content: []byte("minio-lod3")}}
+	groupKey := geoHashModelGroupKey(original)
+	source := map[string][]*GeoHashModel{groupKey: []*GeoHashModel{original}}
 	cache := &localLODModelCache{models: make(map[string]*GltfModel)}
 
 	loaded, err := loadLocalLODModels(cfg, level, source, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
-	instances := loaded["bridge/simple.glb"]
+	instances := loaded[groupKey]
 	if len(instances) != 1 || string(instances[0].Gltf.Content) != string(wantContent) {
 		t.Fatal("local LOD model content was not loaded")
 	}

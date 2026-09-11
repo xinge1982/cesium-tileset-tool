@@ -73,6 +73,23 @@ type GeoHashModel struct {
 	Gltf        *GltfModel      `gorm:"-" json:"gltf"`
 }
 
+func geoHashModelGroupKey(model *GeoHashModel) string {
+	if model == nil {
+		return ""
+	}
+	return model.TableName + "|" + model.Model
+}
+
+func appendGeoHashModelsByGroup(target map[string][]*GeoHashModel, models ...*GeoHashModel) {
+	for _, model := range models {
+		if model == nil {
+			continue
+		}
+		groupKey := geoHashModelGroupKey(model)
+		target[groupKey] = append(target[groupKey], model)
+	}
+}
+
 type GeoHashData struct {
 	Lng     float64 `gorm:"column:lng" json:"lng"`
 	Lat     float64 `gorm:"column:lat" json:"lat"`
@@ -797,7 +814,11 @@ func loadLocalLODModels(cfg *config.Config, level tileLODLevel, source map[strin
 	}
 
 	result := make(map[string][]*GeoHashModel)
-	for modelName, instances := range source {
+	for _, instances := range source {
+		if len(instances) == 0 || instances[0] == nil {
+			continue
+		}
+		modelName := instances[0].Model
 		cleanName := filepath.Clean(filepath.FromSlash(strings.ReplaceAll(modelName, "\\", "/")))
 		if filepath.IsAbs(cleanName) || cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("LOD%d model path escapes model folder: %s", level.Level, modelName)
@@ -830,7 +851,7 @@ func loadLocalLODModels(cfg *config.Config, level tileLODLevel, source map[strin
 		for _, instance := range instances {
 			cloned := *instance
 			cloned.Gltf = gltfModel
-			result[modelName] = append(result[modelName], &cloned)
+			appendGeoHashModelsByGroup(result, &cloned)
 		}
 	}
 	return result, nil
@@ -928,32 +949,32 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 			if errQ != nil {
 				return nil, errQ
 			}
-			for s, hashModels := range vs {
-				models[s] = append(models[s], hashModels...)
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		case DeviceTileTableName:
 			vs, errQ := QueryDevicesByGeohashBBox(configName, db, geoHash)
 			if errQ != nil {
 				return nil, errQ
 			}
-			for s, hashModels := range vs {
-				models[s] = append(models[s], hashModels...)
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		case PoleTileTableName:
 			vs, errQ := QueryPolesByGeohashBBox(configName, db, geoHash)
 			if errQ != nil {
 				return nil, errQ
 			}
-			for s, hashModels := range vs {
-				models[s] = append(models[s], hashModels...)
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		case GantryTileTableName:
 			vs, errQ := QueryGantrysByGeohashBBox(configName, db, geoHash)
 			if errQ != nil {
 				return nil, errQ
 			}
-			for s, hashModels := range vs {
-				models[s] = append(models[s], hashModels...)
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		default:
 			return nil, fmt.Errorf("Unsupport table %s", name)
@@ -1392,7 +1413,7 @@ func getModelContentFromMinio(db *gorm.DB, cfgName string, devices []*GeoHashMod
 		}
 
 		device.Gltf = model
-		models[device.Model] = append(models[device.Model], device)
+		appendGeoHashModelsByGroup(models, device)
 	}
 	return models, nil
 }

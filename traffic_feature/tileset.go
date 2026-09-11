@@ -646,7 +646,7 @@ func (s *FeatureMan) getFeaturesChangeModel(c *gin.Context) {
 			ContentType: detectGltfFormat(content),
 		},
 	}
-	models[modelName] = append(models[modelName], &device)
+	appendGeoHashModelsByGroup(models, &device)
 
 	var center = []float64{lng, lat}
 	var region = [4]float64{lng - 0.0005, lat - 0.0005, lng + 0.0005, lat + 0.0005}

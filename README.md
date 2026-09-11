@@ -36,6 +36,11 @@ Each directory uses the value of the database `model` field as its relative
 model path. Missing local models are skipped only for that LOD. Empty LODs are
 omitted from the tile node chain.
 
+Internally, model instances are grouped by `TableName|Model` so equal model
+names from different source tables cannot be merged accidentally. This group
+key is never used as a file path; local and MinIO model lookup always uses the
+original `model` field.
+
 Generated tile models use a Geohash directory and one file per LOD:
 
 ```text
