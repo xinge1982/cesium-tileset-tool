@@ -1,24 +1,121 @@
 package traffic_feature
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"cesium-tileset-tool/config"
+)
 
 func TestTileModelRelativePath(t *testing.T) {
 	tests := []struct {
 		geohash string
+		lod     int
 		want    string
 	}{
-		{geohash: "wtw", want: "tiles/w/wtw.glb"},
-		{geohash: "wtw3", want: "tiles/wt/wtw3.glb"},
-		{geohash: "wtw3s", want: "tiles/wt/wtw/wtw3s.glb"},
-		{geohash: "wtw3sjq", want: "tiles/wt/wtw3/wtw3s/wtw3sjq.glb"},
-		{geohash: "wtw3sjq9", want: "tiles/wt/wtw3/wtw3sj/wtw3sjq9.glb"},
+		{geohash: "wtw", lod: 0, want: "tiles/w/wtw/lod0.glb"},
+		{geohash: "wtw3", lod: 1, want: "tiles/wt/wtw3/lod1.glb"},
+		{geohash: "wtw3s", lod: 2, want: "tiles/wt/wtw/wtw3s/lod2.glb"},
+		{geohash: "wtw3sjq", lod: 3, want: "tiles/wt/wtw3/wtw3s/wtw3sjq/lod3.glb"},
+		{geohash: "wtw3sjq9", lod: 3, want: "tiles/wt/wtw3/wtw3sj/wtw3sjq9/lod3.glb"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.geohash, func(t *testing.T) {
-			if got := tileModelRelativePath(tt.geohash); got != tt.want {
-				t.Fatalf("tileModelRelativePath(%q) = %q, want %q", tt.geohash, got, tt.want)
+			if got := tileModelRelativePath(tt.geohash, tt.lod); got != tt.want {
+				t.Fatalf("tileModelRelativePath(%q, %d) = %q, want %q", tt.geohash, tt.lod, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEnsureLocalLODModelDirectories(t *testing.T) {
+	cfg := &config.Config{NetworkFolder: t.TempDir()}
+	levels := []tileLODLevel{
+		{Level: 0, ModelFolder: "lod0", GeometricError: 200},
+		{Level: 1, ModelFolder: "lod1", GeometricError: 80},
+		{Level: 2, ModelFolder: "lod2", GeometricError: 25},
+		{Level: 3, GeometricError: 0},
+	}
+
+	if err := ensureLocalLODModelDirectories(cfg, levels); err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range []string{"lod0", "lod1", "lod2"} {
+		info, err := os.Stat(filepath.Join(cfg.NetworkFolder, folder))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("LOD model folder %q was not created", folder)
+		}
+	}
+}
+
+func TestEnsureLocalLODModelDirectoriesRejectsInvalidErrors(t *testing.T) {
+	cfg := &config.Config{NetworkFolder: t.TempDir()}
+	levels := []tileLODLevel{
+		{Level: 0, ModelFolder: "lod0", GeometricError: 80},
+		{Level: 1, ModelFolder: "lod1", GeometricError: 80},
+		{Level: 3, GeometricError: 0},
+	}
+
+	if err := ensureLocalLODModelDirectories(cfg, levels); err == nil {
+		t.Fatal("expected equal geometricError values to be rejected")
+	}
+}
+
+func TestBuildLODNodeChain(t *testing.T) {
+	transform := [16]float64{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}
+	region := [6]float64{121.0, 31.0, 121.001, 31.001, 10, 20}
+	lods := []builtTileLOD{
+		{level: tileLODLevel{Level: 0, GeometricError: 200}, uri: "lod0.glb", built: &BuildModel{Region: region, Transform: transform}},
+		{level: tileLODLevel{Level: 2, GeometricError: 25}, uri: "lod2.glb", built: &BuildModel{Region: region, Transform: transform}},
+	}
+
+	root := buildLODNodeChain(&GeoHashTile{Geohash: "wtw3", Level: 4}, lods, "20260911")
+	if root == nil || root.Content == nil || root.Content.Uri != "lod0.glb?t=20260911" {
+		t.Fatal("LOD0 root node was not generated")
+	}
+	if root.Refine != "REPLACE" || root.GeometricError != 200 || root.Transform == nil {
+		t.Fatal("LOD0 root node has invalid refinement properties")
+	}
+	if len(root.Children) != 1 {
+		t.Fatal("expected one child LOD node")
+	}
+	leaf := root.Children[0]
+	if leaf.Content == nil || leaf.Content.Uri != "lod2.glb?t=20260911" {
+		t.Fatal("LOD2 leaf node was not generated")
+	}
+	if leaf.Refine != "REPLACE" || leaf.GeometricError != 0 || leaf.Transform != nil {
+		t.Fatal("deepest available LOD must be a zero-error leaf inheriting its transform")
+	}
+}
+
+func TestLoadLocalLODModelsUsesDatabaseModelPath(t *testing.T) {
+	networkFolder := t.TempDir()
+	modelPath := filepath.Join(networkFolder, "lod1", "bridge", "simple.glb")
+	if err := os.MkdirAll(filepath.Dir(modelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	wantContent := []byte("local-lod-model")
+	if err := os.WriteFile(modelPath, wantContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{NetworkFolder: networkFolder}
+	level := tileLODLevel{Level: 1, ModelFolder: "lod1", GeometricError: 80}
+	original := &GeoHashModel{Id: "1", Model: "bridge/simple.glb", Gltf: &GltfModel{Content: []byte("minio-lod3")}}
+	source := map[string][]*GeoHashModel{"bridge/simple.glb": []*GeoHashModel{original}}
+	cache := &localLODModelCache{models: make(map[string]*GltfModel)}
+
+	loaded, err := loadLocalLODModels(cfg, level, source, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instances := loaded["bridge/simple.glb"]
+	if len(instances) != 1 || string(instances[0].Gltf.Content) != string(wantContent) {
+		t.Fatal("local LOD model content was not loaded")
+	}
+	if string(original.Gltf.Content) != "minio-lod3" {
+		t.Fatal("loading a local LOD mutated the LOD3 source instance")
 	}
 }
