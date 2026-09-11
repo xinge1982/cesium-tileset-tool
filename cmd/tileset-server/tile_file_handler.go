@@ -16,7 +16,7 @@ import (
 )
 
 func getMergedTileSets(c *gin.Context) {
-	rootPath := filepath.Join(config.Instance().NetworkFolder, "tileset")
+	rootPath := filepath.Join(config.Instance().NetworkFolder, "tilesets")
 	tilesetRoot, err := filepath.Abs(rootPath)
 	if err != nil {
 		panic(err)

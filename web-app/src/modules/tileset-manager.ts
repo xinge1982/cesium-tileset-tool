@@ -182,8 +182,12 @@ export class TilesetManager {
 
   private async load(config: TilesetConfig, entry: ManagedEntry): Promise<void> {
     try {
+      let tileUrl = entry.state.url
+      if (tileUrl.indexOf('http') < 0 && tileUrl.indexOf("https") < 0) {
+        tileUrl = import.meta.env.VITE_APP_TILESET_URL + tileUrl
+      }
       const tileset = await Cesium.Cesium3DTileset.fromUrl(
-        entry.state.url,
+        tileUrl,
         this.parseOptions(config.options),
       )
       entry.tileset = tileset

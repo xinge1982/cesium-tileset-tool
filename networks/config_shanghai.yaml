@@ -29,20 +29,20 @@ LOD:
   Enabled: true
   LOD0:
     ModelFolder: lod0
-    GeometricError: 200
+    GeometricError: 100
   LOD1:
     ModelFolder: lod1
-    GeometricError: 80
+    GeometricError: 40
   LOD2:
     ModelFolder: lod2
-    GeometricError: 25
+    GeometricError: 16
   LOD3:
     GeometricError: 0
 
 Tilesets:
   features:
     name: 设备设施
-    url: https://47.104.194.94:28199/share/networks/network_shanghai_g1503_2026/tilesets/features/tileset.json
+    url: /tilesets/features/tileset.json
     type: features
     enabled: true
     maintainable: true
@@ -419,6 +419,76 @@ Tilesets:
     options:
       - ["modelForwardAxis","Y"]
       - ["modelUpAxis", "Z"]
+
+  roadsurface:
+    name: 道路面
+    url: https://tileset.amap3d.online:48611/share/shanghai_g1503/roadsurface/tileset.json
+    type: road_surface
+    enabled: true
+    maintainable: true
+    order: 6
+    feature:
+      idField: id
+      sourceField: id
+    sources:
+      - id: dlm
+        name: 道路面
+
+        match:
+          operator: prefix
+          value: hd_424_dlm
+
+        keyMapping:
+          operator: removePrefix
+          value: hd_424_dlm.
+
+        table:
+          schema: public
+          name: aa_hd_424_dlmbak_bh
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: name_bm
+            label: 名称
+            detail: true
+            list: true
+            search: true
+            editable: true
+            submit: true
+
+          - name: bz
+            label: 修改原因
+            detail: true
+            list: true
+            search: true
+            editable: true
+            submit: true
+            storage:
+              type: varchar
+              column: bz
+              autoCreate: true
+
+          - name: geom
+            label: 道路面范围
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+    options:
+      - ["modelForwardAxis","Y"]
+      - ["modelUpAxis", "Z"]
+
 
 ImageTile: https://webst01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=6&x={x}&y={y}&z={z}
 

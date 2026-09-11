@@ -241,10 +241,15 @@ func loadConfig() {
 
 	r := gin.Default()
 
-	// 大于 2 KB 的响应启用 gzip
+	// Enable gzip for responses
 	r.Use(gzip.Gzip(
 		gzip.DefaultCompression,
-		gzip.WithMinLength(2048),
+		gzip.WithExcludedExtensions([]string{
+			".png", ".jpg", ".jpeg", ".gif", ".webp",
+			".mp4", ".mov", ".zip", ".gz", ".br", ".pdf",
+			//glb文件单独判断是否是已经压缩的
+			".glb",
+		}),
 	))
 
 	r.Use(CORSMiddleware())
