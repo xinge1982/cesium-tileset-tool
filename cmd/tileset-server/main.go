@@ -21,7 +21,10 @@ import (
 	"github.com/sirupsen/logrus/hooks/writer"
 )
 
-var configPath = flag.String("c", "config.yaml", "config file path")
+type MyFormatter struct {
+}
+
+var configPathPtr = flag.String("c", "", "File path of config.yaml")
 var logFile = flag.Bool("logfile", false, "log into file")
 
 var GitCommit string
@@ -29,13 +32,67 @@ var BuildDate string
 
 const Version string = "2.0"
 
-type MyFormatter struct {
+type Runner interface {
+	Init([]string) error
+	Run() error
+	Name() string
 }
 
 func main() {
-	flag.Parse()
+	subCmds := []Runner{}
+	if len(os.Args) > 1 {
+		for _, cmd := range subCmds {
+			if strings.EqualFold(os.Args[1], cmd.Name()) {
+				err := cmd.Init(os.Args[2:])
+				if err != nil {
+					log.Error(err)
+					return
+				}
+				_ = cmd.Run()
+				return
+			}
+		}
+	}
 
-	fmt.Println(fmt.Sprintf("Start server, Version:%s Date:%s Build:%s", Version, BuildDate, GitCommit))
+	flag.Parse()
+	// config file
+	if len(*configPathPtr) > 0 {
+		if _, err := os.Stat(*configPathPtr); err == nil {
+			config.ConfigFilePath = *configPathPtr
+		} else {
+			fmt.Println(fmt.Errorf("error in config file, file not exists: %s", *configPathPtr))
+		}
+	} else {
+		fn := "./config.yaml"
+		configPathPtr = &fn
+		config.ConfigFilePath = *configPathPtr
+		if _, err := os.Stat(*configPathPtr); err != nil {
+			if os.IsNotExist(err) {
+				if errW := os.WriteFile(fn, []byte{}, 0777); errW != nil {
+					log.Fatal(errW)
+				} else {
+					fmt.Println(fmt.Sprintf("created config file: %s", config.ConfigFilePath))
+				}
+			}
+			fmt.Println(fmt.Errorf("error in config file, file not exists: %s %s", *configPathPtr, err.Error()))
+		}
+	}
+
+	fmt.Print(`
+
+   /$$     /$$ /$$                                                                              
+  | $$    |__/| $$                                                                              
+ /$$$$$$   /$$| $$  /$$$$$$           /$$$$$$$  /$$$$$$   /$$$$$$  /$$    /$$ /$$$$$$   /$$$$$$ 
+|_  $$_/  | $$| $$ /$$__  $$ /$$$$$$ /$$_____/ /$$__  $$ /$$__  $$|  $$  /$$//$$__  $$ /$$__  $$
+  | $$    | $$| $$| $$$$$$$$|______/|  $$$$$$ | $$$$$$$$| $$  \__/ \  $$/$$/| $$$$$$$$| $$  \__/
+  | $$ /$$| $$| $$| $$_____/         \____  $$| $$_____/| $$        \  $$$/ | $$_____/| $$      
+  |  $$$$/| $$| $$|  $$$$$$$         /$$$$$$$/|  $$$$$$$| $$         \  $/  |  $$$$$$$| $$      
+   \___/  |__/|__/ \_______/        |_______/  \_______/|__/          \_/    \_______/|__/      
+                                                                                                
+                                                                                    
+`)
+
+	fmt.Println(fmt.Sprintf("Start tile-server, Version:%s Date:%s Build:%s", Version, BuildDate, GitCommit))
 
 	if *logFile {
 		fn := "logrus.log"
@@ -78,6 +135,17 @@ func main() {
 
 	log.SetFormatter(&MyFormatter{})
 
+	log.Println(fmt.Sprintf("Program start. Version %s Date:%s build:%s", Version, BuildDate, GitCommit))
+	log.Println(fmt.Sprintf("Env config-path:%s", *configPathPtr))
+
+	var cfg = config.Instance()
+	cfg.AppVersion = Version
+	cfg.BuildDate = BuildDate
+	cfg.GitCommit = GitCommit
+	if cfg.Debug {
+		log.SetLevel(log.DebugLevel)
+	}
+
 	loadConfig()
 
 	ticker := time.NewTicker(time.Second)
@@ -101,6 +169,22 @@ OUTLOOP:
 	log.Println("exit.")
 }
 
+func (m *MyFormatter) Format(entry *log.Entry) ([]byte, error) {
+	var b *bytes.Buffer
+	if entry.Buffer != nil {
+		b = entry.Buffer
+	} else {
+		b = &bytes.Buffer{}
+	}
+
+	timestamp := entry.Time.Local().Format("2006-01-02 15:04:05")
+	var newLog string
+	newLog = fmt.Sprintf("%s\t%s\t%s\n", timestamp, entry.Level, entry.Message)
+
+	b.WriteString(newLog)
+	return b.Bytes(), nil
+}
+
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
@@ -119,10 +203,10 @@ func CORSMiddleware() gin.HandlerFunc {
 
 func loadConfig() {
 	// config file
-	if _, err := os.Stat(*configPath); err == nil {
-		config.ConfigFilePath = *configPath
+	if _, err := os.Stat(*configPathPtr); err == nil {
+		config.ConfigFilePath = *configPathPtr
 	} else {
-		log.Fatal(fmt.Errorf("error in config file, file not exists: %s", *configPath))
+		log.Fatal(fmt.Errorf("error in config file, file not exists: %s", *configPathPtr))
 	}
 
 	var cfg = config.Instance()
@@ -131,7 +215,7 @@ func loadConfig() {
 	}
 
 	configName := ""
-	_, fn := filepath.Split(*configPath)
+	_, fn := filepath.Split(*configPathPtr)
 	ext := filepath.Ext(fn)
 	configName = strings.ReplaceAll(fn, ext, "")
 
@@ -169,6 +253,9 @@ func loadConfig() {
 	r.Static("/assets", "./dist/assets")
 	r.Static("/cesium", "./dist/cesium")
 
+	// 路网
+	r.GET("tilesets/*filepath", getMergedTileSets)
+
 	dc.ApiRegister(r, "api")
 
 	var certFilePath = "cert"
@@ -202,20 +289,4 @@ func loadConfig() {
 			log.Info("Http server start: " + server)
 		}
 	}()
-}
-
-func (m *MyFormatter) Format(entry *log.Entry) ([]byte, error) {
-	var b *bytes.Buffer
-	if entry.Buffer != nil {
-		b = entry.Buffer
-	} else {
-		b = &bytes.Buffer{}
-	}
-
-	timestamp := entry.Time.Local().Format("2006-01-02 15:04:05")
-	var newLog string
-	newLog = fmt.Sprintf("%s\t%s\t%s\n", timestamp, entry.Level, entry.Message)
-
-	b.WriteString(newLog)
-	return b.Bytes(), nil
 }

@@ -157,8 +157,8 @@
             v-model:current-page="searchPageNumber"
             v-model:page-size="searchPageSize"
             :total="searchTotal"
-            @current-change="searchShebei"
-            @size-change="searchShebei"
+            @current-change="searchData"
+            @size-change="searchData"
         />
       </aside>
 
@@ -577,7 +577,7 @@ async function handleHelpTourChange(step: number) {
     if (!selectHelpTourSource()) return
     searchKeyword.value = HELP_TOUR_SEARCH_KEYWORD
     searchPageNumber.value = 1
-    helpTourSearchPromise = searchShebei()
+    helpTourSearchPromise = searchData()
     await helpTourSearchPromise
     if (!searchResults.value.length) {
       ElMessage.warning('示例关键词没有搜索到数据，可以修改关键词后再次搜索')
@@ -638,10 +638,10 @@ function handleSourceChange() {
 
 function resetSearch() {
   searchPageNumber.value = 1
-  searchShebei()
+  searchData()
 }
 
-async function searchShebei() {
+async function searchData() {
   const [tilesetKey, sourceId] = currentSourcePath.value
   if (!tilesetKey || !sourceId) {
     searchResults.value = []

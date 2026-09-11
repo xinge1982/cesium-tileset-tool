@@ -23,7 +23,6 @@ func (s *DataAccess) GetDB(c *gin.Context) (*gorm.DB, bool) {
 
 func (s *DataAccess) ApiRegister(g *gin.Engine, prefix string) {
 	r := g.Group(prefix)
-	r.GET("searchShebei", s.searchShebei)
 
 	searchService := NewTilesetSourceSearchService(
 		s.conn,
