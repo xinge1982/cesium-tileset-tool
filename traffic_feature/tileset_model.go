@@ -819,11 +819,12 @@ func loadLocalLODModels(cfg *config.Config, level tileLODLevel, source map[strin
 			continue
 		}
 		modelName := instances[0].Model
+		tableName := instances[0].TableName
 		cleanName := filepath.Clean(filepath.FromSlash(strings.ReplaceAll(modelName, "\\", "/")))
 		if filepath.IsAbs(cleanName) || cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("LOD%d model path escapes model folder: %s", level.Level, modelName)
 		}
-		modelPath := filepath.Join(root, cleanName)
+		modelPath := filepath.Join(root, tableName, cleanName)
 		cache.RLock()
 		gltfModel, cached := cache.models[modelPath]
 		cache.RUnlock()
