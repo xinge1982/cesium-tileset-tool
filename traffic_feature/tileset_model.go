@@ -102,6 +102,23 @@ type TileJobResult struct {
 	err     error
 }
 
+type tileLODLevel struct {
+	Level          int
+	ModelFolder    string
+	GeometricError float64
+}
+
+type builtTileLOD struct {
+	level tileLODLevel
+	uri   string
+	built *BuildModel
+}
+
+type localLODModelCache struct {
+	sync.RWMutex
+	models map[string]*GltfModel
+}
+
 const tileModelRootDir = "tiles"
 
 // tileModelRelativePath returns a URL-style relative path for a geohash tile.
@@ -109,8 +126,8 @@ const tileModelRootDir = "tiles"
 // the complete prefix accumulated so far, making its spatial prefix directly
 // identifiable while preventing a single directory from holding too many GLBs.
 //
-// Example: wtw3sjq9 -> tiles/wt/wtw3/wtw3sj/wtw3sjq9.glb
-func tileModelRelativePath(geohash string) string {
+// Example: wtw3sjq9 LOD2 -> tiles/wt/wtw3/wtw3sj/wtw3sjq9/lod2.glb
+func tileModelRelativePath(geohash string, lod int) string {
 	parts := []string{tileModelRootDir}
 	prefixLength := len(geohash) - 2
 	for start := 0; start < prefixLength; start += 2 {
@@ -120,8 +137,75 @@ func tileModelRelativePath(geohash string) string {
 		}
 		parts = append(parts, geohash[:end])
 	}
-	parts = append(parts, geohash+".glb")
+	parts = append(parts, geohash, fmt.Sprintf("lod%d.glb", lod))
 	return path.Join(parts...)
+}
+
+func configuredTileLODLevels(cfg *config.Config) []tileLODLevel {
+	if cfg == nil || !cfg.LOD.Enabled {
+		return []tileLODLevel{{Level: 3, GeometricError: 0}}
+	}
+
+	return []tileLODLevel{
+		{Level: 0, ModelFolder: cfg.LOD.LOD0.ModelFolder, GeometricError: cfg.LOD.LOD0.GeometricError},
+		{Level: 1, ModelFolder: cfg.LOD.LOD1.ModelFolder, GeometricError: cfg.LOD.LOD1.GeometricError},
+		{Level: 2, ModelFolder: cfg.LOD.LOD2.ModelFolder, GeometricError: cfg.LOD.LOD2.GeometricError},
+		{Level: 3, GeometricError: cfg.LOD.LOD3.GeometricError},
+	}
+}
+
+func localLODModelRoot(cfg *config.Config, level tileLODLevel) (string, error) {
+	if cfg == nil {
+		return "", errors.New("tileset config is nil")
+	}
+	folder := filepath.Clean(strings.TrimSpace(level.ModelFolder))
+	if folder == "." || folder == "" {
+		return "", fmt.Errorf("LOD%d model folder is empty", level.Level)
+	}
+	if filepath.IsAbs(folder) {
+		return "", fmt.Errorf("LOD%d model folder must be relative to NetworkFolder", level.Level)
+	}
+
+	root, err := filepath.Abs(cfg.NetworkFolder)
+	if err != nil {
+		return "", fmt.Errorf("resolve NetworkFolder: %w", err)
+	}
+	modelRoot, err := filepath.Abs(filepath.Join(root, folder))
+	if err != nil {
+		return "", fmt.Errorf("resolve LOD%d model folder: %w", level.Level, err)
+	}
+	rel, err := filepath.Rel(root, modelRoot)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("LOD%d model folder escapes NetworkFolder", level.Level)
+	}
+	return modelRoot, nil
+}
+
+func ensureLocalLODModelDirectories(cfg *config.Config, levels []tileLODLevel) error {
+	previousError := math.Inf(1)
+	for _, level := range levels {
+		if level.GeometricError < 0 {
+			return fmt.Errorf("LOD%d geometricError must not be negative", level.Level)
+		}
+		if level.GeometricError >= previousError {
+			return fmt.Errorf("LOD%d geometricError %.3f must be lower than the preceding LOD error %.3f", level.Level, level.GeometricError, previousError)
+		}
+		previousError = level.GeometricError
+		if level.Level == 3 {
+			if level.GeometricError != 0 {
+				return fmt.Errorf("LOD3 geometricError must be 0")
+			}
+			continue
+		}
+		root, err := localLODModelRoot(cfg, level)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(root, 0755); err != nil {
+			return fmt.Errorf("create LOD%d model folder %s: %w", level.Level, root, err)
+		}
+	}
+	return nil
 }
 
 func getNetworkPath(code string) (string, error) {
@@ -300,9 +384,16 @@ func UpdateTileByGeoHash(configName string, partitionTable string, tilesetsFolde
 	for _, change := range changes {
 		node := FindTileNodeByGeohash(tileset.Root, change.Geohash)
 		if node != nil {
+			bound := change.BoundingVolume
+			if change.Transform != nil {
+				bound.Box = cesium.WorldBoxToLocalBox(bound.Box, *change.Transform)
+			}
+			node.BoundingVolume = bound
 			node.Children = change.Children
 			node.Transform = change.Transform
 			node.Content = change.Content
+			node.GeometricError = change.GeometricError
+			node.Refine = change.Refine
 		} else {
 			return fmt.Errorf("no tile with geohash %s in %s", change.Geohash, configName)
 		}
@@ -527,29 +618,48 @@ func refreshTileBound(node *TileNode) {
 	if node.Children == nil || len(node.Children) == 0 {
 		return
 	}
+
+	// LOD nodes already have a bounding volume in the coordinate system inherited
+	// from their outer LOD node. Do not merge it again from the next LOD level.
+	if node.Content != nil {
+		for _, child := range node.Children {
+			refreshTileBound(child)
+		}
+		return
+	}
 	// 合并 boundingVolume
 
 	var boxes []cesium.Box12
+	maxChildError := 0.0
 	for _, n := range node.Children {
 		refreshTileBound(n)
 		boxes = append(boxes, n.BoundingVolume.Box)
+		if n.GeometricError > maxChildError {
+			maxChildError = n.GeometricError
+		}
 		if n.Transform != nil {
 			box := cesium.WorldBoxToLocalBox(n.BoundingVolume.Box, *n.Transform)
 			n.BoundingVolume.Box = box
-		}
-		if n.Content != nil {
-			n.GeometricError = 0
 		}
 	}
 	box := cesium.MergeBoxes(boxes, 1.05)
 	node.BoundingVolume = BoundingVolume{
 		Box: box,
 	}
+	if node.GeometricError < maxChildError {
+		node.GeometricError = maxChildError
+	}
 }
 
 func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHashTile, geoTable GeoTable, tilesetsFolder string, partitionTable string) (map[string]*TileNode, error) {
 	tilesByGeohash := make(map[string]*TileNode)
 	workerCount := 8 // tune this based on CPU / DB capacity
+	cfg := config.Instance()
+	lodLevels := configuredTileLODLevels(cfg)
+	if err := ensureLocalLODModelDirectories(cfg, lodLevels); err != nil {
+		return nil, err
+	}
+	localModelCache := &localLODModelCache{models: make(map[string]*GltfModel)}
 
 	jobs := make(chan TileJob)
 	results := make(chan TileJobResult)
@@ -574,29 +684,34 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 					continue
 				}
 
-				fn, built, err3 := buildTileByHashModels(models, t, tilesetsFolder)
-				if err3 != nil {
-					log.Errorf("Failed to build tile for %s:%s %s", configName, partitionTable, err3.Error())
+				builtLODs := make([]builtTileLOD, 0, len(lodLevels))
+				for _, lodLevel := range lodLevels {
+					lodModels := models
+					if lodLevel.Level < 3 {
+						lodModels, err2 = loadLocalLODModels(cfg, lodLevel, models, localModelCache)
+						if err2 != nil {
+							results <- TileJobResult{err: err2}
+							builtLODs = nil
+							break
+						}
+					}
+					if len(lodModels) == 0 {
+						continue
+					}
+
+					fn, built, err3 := buildTileByHashModels(lodModels, t, tilesetsFolder, lodLevel.Level)
+					if err3 != nil {
+						results <- TileJobResult{err: fmt.Errorf("build LOD%d tile %s: %w", lodLevel.Level, t.Geohash, err3)}
+						builtLODs = nil
+						break
+					}
+					builtLODs = append(builtLODs, builtTileLOD{level: lodLevel, uri: fn, built: built})
+				}
+				if len(builtLODs) == 0 {
 					continue
 				}
 
-				transform := built.Transform
-				box := cesium.RegionToBox(built.Region, 1.2)
-
-				/*				box := cesium.GetBoxFromBoundHeight(fmt.Sprintf("%.12f,%.12f,%.12f,%.12f", t.MinX, t.MinY, t.MaxX, t.MaxY),
-								built.Region[4], built.Region[5])*/
-				node := &TileNode{
-					BoundingVolume: BoundingVolume{
-						Box: box,
-					},
-					GeometricError: getGeometricError(t.Level),
-					Content: &TileContent{
-						Uri: fmt.Sprintf("%s?t=%s", fn, now.Format("20060102150405")),
-					},
-					Transform: &transform,
-					Level:     t.Level,
-					Geohash:   t.Geohash,
-				}
+				node := buildLODNodeChain(t, builtLODs, now.Format("20060102150405"))
 
 				results <- TileJobResult{
 					geohash: t.Geohash,
@@ -675,7 +790,95 @@ func RemoveFilesOlderThan(dir string, maxAge time.Duration) error {
 	})
 }
 
-func buildTileByHashModels(models map[string][]*GeoHashModel, tile *GeoHashTile, tilesetsFolder string) (string, *BuildModel, error) {
+func loadLocalLODModels(cfg *config.Config, level tileLODLevel, source map[string][]*GeoHashModel, cache *localLODModelCache) (map[string][]*GeoHashModel, error) {
+	root, err := localLODModelRoot(cfg, level)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string][]*GeoHashModel)
+	for modelName, instances := range source {
+		cleanName := filepath.Clean(filepath.FromSlash(strings.ReplaceAll(modelName, "\\", "/")))
+		if filepath.IsAbs(cleanName) || cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("LOD%d model path escapes model folder: %s", level.Level, modelName)
+		}
+		modelPath := filepath.Join(root, cleanName)
+		cache.RLock()
+		gltfModel, cached := cache.models[modelPath]
+		cache.RUnlock()
+		if !cached {
+			content, readErr := os.ReadFile(modelPath)
+			if readErr != nil {
+				if !os.IsNotExist(readErr) {
+					return nil, fmt.Errorf("read LOD%d model %s: %w", level.Level, modelPath, readErr)
+				}
+				log.Warnf("LOD%d model not found, skip: %s", level.Level, modelPath)
+			} else {
+				gltfModel = &GltfModel{
+					Name:        modelName,
+					Content:     content,
+					ContentType: detectGltfFormat(content),
+				}
+			}
+			cache.Lock()
+			cache.models[modelPath] = gltfModel
+			cache.Unlock()
+		}
+		if gltfModel == nil {
+			continue
+		}
+		for _, instance := range instances {
+			cloned := *instance
+			cloned.Gltf = gltfModel
+			result[modelName] = append(result[modelName], &cloned)
+		}
+	}
+	return result, nil
+}
+
+func buildLODNodeChain(tile *GeoHashTile, lods []builtTileLOD, timestamp string) *TileNode {
+	outerTransform := lods[0].built.Transform
+	var root *TileNode
+	var parent *TileNode
+
+	for index, lod := range lods {
+		box := cesium.RegionToBox(lod.built.Region, 1.2)
+		if index > 0 {
+			box = cesium.WorldBoxToLocalBox(box, outerTransform)
+		}
+
+		geohash := tile.Geohash
+		if index > 0 {
+			geohash = fmt.Sprintf("%s#lod%d", tile.Geohash, lod.level.Level)
+		}
+		geometricError := lod.level.GeometricError
+		if index == len(lods)-1 {
+			// The deepest available node is a leaf even when LOD3 is missing.
+			geometricError = 0
+		}
+		node := &TileNode{
+			BoundingVolume: BoundingVolume{Box: box},
+			GeometricError: geometricError,
+			Refine:         "REPLACE",
+			Content: &TileContent{
+				Uri: fmt.Sprintf("%s?t=%s", lod.uri, timestamp),
+			},
+			Level:   tile.Level,
+			Geohash: geohash,
+		}
+		if root == nil {
+			root = node
+			node.Transform = &outerTransform
+		} else {
+			parent.Children = []*TileNode{node}
+		}
+		parent = node
+	}
+
+	return root
+}
+
+func buildTileByHashModels(models map[string][]*GeoHashModel, tile *GeoHashTile, tilesetsFolder string, lod int) (string, *BuildModel, error) {
 	minZ, maxZ := 1e9, -1e9
 	for _, hashModels := range models {
 		for _, model := range hashModels {
@@ -689,7 +892,7 @@ func buildTileByHashModels(models map[string][]*GeoHashModel, tile *GeoHashTile,
 	}
 	minZ = math.Floor(minZ)
 	maxZ = math.Ceil(maxZ)
-	fn := tileModelRelativePath(tile.Geohash)
+	fn := tileModelRelativePath(tile.Geohash, lod)
 	region := [6]float64{tile.MinX, tile.MinY, tile.MaxX, tile.MaxY, minZ, maxZ}
 	center := []float64{(tile.MaxX + tile.MinX) / 2.0, (tile.MaxY + tile.MinY) / 2.0, 0}
 
@@ -840,28 +1043,15 @@ func UpdateGeoHashTileByDataLngLats(configName string, partitionTable string, ti
 	}
 
 	// 重新生成瓦片数据
-	var changes []*TileChange
+	var changedTiles []*GeoHashTile
 	for _, t := range leafTiles {
-		if t.UpdateTime.IsZero() {
-			continue
+		if !t.UpdateTime.IsZero() {
+			changedTiles = append(changedTiles, t)
 		}
-
-		models, err2 := queryGeoHashModelData(configName, geoTable, db, t.Geohash, "")
-		if err2 != nil {
-			return partitionNeedRefresh, err2
-		}
-		if len(models) == 0 {
-			continue
-		}
-
-		fn, _, err3 := buildTileByHashModels(models, t, tilesetsFolder)
-		if err3 != nil {
-			return partitionNeedRefresh, err3
-		}
-		changes = append(changes, &TileChange{
-			Geohash: t.Geohash,
-			Content: &TileContent{Uri: fmt.Sprintf("%s?t=%s", fn, now.Format("20060102150405"))},
-		})
+	}
+	changes, err := doTileJob(db, now, configName, changedTiles, geoTable, tilesetsFolder, partitionTable)
+	if err != nil {
+		return partitionNeedRefresh, err
 	}
 
 	absPath := filepath.Join(tilesetsFolder, "tileset.json")
@@ -875,13 +1065,19 @@ func UpdateGeoHashTileByDataLngLats(configName string, partitionTable string, ti
 	if err != nil {
 		return partitionNeedRefresh, err
 	}
-	if tileset.Root != nil {
-		refreshTileBound(tileset.Root)
-	}
-	for _, change := range changes {
-		node := FindTileNodeByGeohash(tileset.Root, change.Geohash)
+	for geohash, change := range changes {
+		node := FindTileNodeByGeohash(tileset.Root, geohash)
 		if node != nil {
+			bound := change.BoundingVolume
+			if change.Transform != nil {
+				bound.Box = cesium.WorldBoxToLocalBox(bound.Box, *change.Transform)
+			}
+			node.BoundingVolume = bound
 			node.Content = change.Content
+			node.GeometricError = change.GeometricError
+			node.Transform = change.Transform
+			node.Refine = change.Refine
+			node.Children = change.Children
 		}
 	}
 	if tileset.Extensions.ThreeDTILESMetadata.Schema.Classes.TilesetInfo.Properties.UpdateTime != nil {
