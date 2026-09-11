@@ -138,6 +138,13 @@ type localLODModelCache struct {
 
 const tileModelRootDir = "tiles"
 
+// Each Geohash parent covers a larger area than its children. Keeping its
+// error strictly larger prevents several spatial levels from being refined at
+// the same SSE threshold. The first configured positive LOD error is used as
+// the leaf spatial error floor, so the spatial tree follows the project's LOD
+// configuration instead of a separate hard-coded error table.
+const geohashParentGeometricErrorScale = 2.0
+
 // tileModelRelativePath returns a URL-style relative path for a geohash tile.
 // A directory is added for every two geohash characters. Each directory keeps
 // the complete prefix accumulated so far, making its spatial prefix directly
@@ -169,6 +176,18 @@ func configuredTileLODLevels(cfg *config.Config) []tileLODLevel {
 		{Level: 2, ModelFolder: cfg.LOD.LOD2.ModelFolder, GeometricError: cfg.LOD.LOD2.GeometricError},
 		{Level: 3, GeometricError: cfg.LOD.LOD3.GeometricError},
 	}
+}
+
+func geohashGeometricErrorBase(levels []tileLODLevel) float64 {
+	for _, level := range levels {
+		if level.GeometricError > 0 {
+			return level.GeometricError
+		}
+	}
+
+	// A zero-error spatial tree would never refine to its content children.
+	// This fallback applies when LOD is disabled or all configured errors are 0.
+	return 1
 }
 
 func localLODModelRoot(cfg *config.Config, level tileLODLevel) (string, error) {
@@ -482,6 +501,8 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 
 	// 收集geohash
 	now := time.Now()
+	lodLevels := configuredTileLODLevels(config.Instance())
+	geohashErrorBase := geohashGeometricErrorBase(lodLevels)
 	// 构建叶子节点
 	tilesByGeohash, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable)
 	if errG != nil {
@@ -496,7 +517,7 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 			parentMap[parent] = &TileNode{
 				BoundingVolume: BoundingVolume{},
 				Content:        nil,
-				GeometricError: getGeometricError(len(parent)),
+				GeometricError: 0,
 				Transform:      nil,
 				Refine:         "ADD",
 				Children:       nil,
@@ -536,7 +557,7 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 				parentNode = &TileNode{
 					BoundingVolume: BoundingVolume{},
 					Content:        nil,
-					GeometricError: getGeometricError(len(parent)),
+					GeometricError: 0,
 					Transform:      nil,
 					Refine:         "ADD",
 					Children:       nil,
@@ -568,7 +589,7 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	// 合并 boundingVolume
 	root := &TileNode{
 		BoundingVolume: BoundingVolume{},
-		GeometricError: getGeometricError(2),
+		GeometricError: 0,
 		Children:       nil,
 		Level:          2,
 		Geohash:        "root",
@@ -577,10 +598,10 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	for _, n := range parentMap {
 		root.Children = append(root.Children, n)
 	}
-	refreshTileBound(root)
+	refreshGeoHashTileBound(root, geohashErrorBase)
 
 	tileset := &Tileset{
-		GeometricError: getGeometricError(2),
+		GeometricError: root.GeometricError,
 		Root:           root,
 		ExtensionsUsed: []string{"3DTILES_metadata"},
 		Extensions: Extensions{ThreeDTILESMetadata{
@@ -632,6 +653,14 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 }
 
 func refreshTileBound(node *TileNode) {
+	refreshTileBoundWithGeometricError(node, 0)
+}
+
+func refreshGeoHashTileBound(node *TileNode, geohashErrorBase float64) {
+	refreshTileBoundWithGeometricError(node, geohashErrorBase)
+}
+
+func refreshTileBoundWithGeometricError(node *TileNode, geohashErrorBase float64) {
 	if node.Children == nil || len(node.Children) == 0 {
 		return
 	}
@@ -640,7 +669,7 @@ func refreshTileBound(node *TileNode) {
 	// from their outer LOD node. Do not merge it again from the next LOD level.
 	if node.Content != nil {
 		for _, child := range node.Children {
-			refreshTileBound(child)
+			refreshTileBoundWithGeometricError(child, geohashErrorBase)
 		}
 		return
 	}
@@ -649,7 +678,7 @@ func refreshTileBound(node *TileNode) {
 	var boxes []cesium.Box12
 	maxChildError := 0.0
 	for _, n := range node.Children {
-		refreshTileBound(n)
+		refreshTileBoundWithGeometricError(n, geohashErrorBase)
 		boxes = append(boxes, n.BoundingVolume.Box)
 		if n.GeometricError > maxChildError {
 			maxChildError = n.GeometricError
@@ -663,8 +692,17 @@ func refreshTileBound(node *TileNode) {
 	node.BoundingVolume = BoundingVolume{
 		Box: box,
 	}
-	if node.GeometricError < maxChildError {
-		node.GeometricError = maxChildError
+	parentError := maxChildError
+	if geohashErrorBase > 0 {
+		if maxChildError > 0 {
+			parentError = maxChildError * geohashParentGeometricErrorScale
+		}
+		if parentError < geohashErrorBase {
+			parentError = geohashErrorBase
+		}
+	}
+	if node.GeometricError < parentError {
+		node.GeometricError = parentError
 	}
 }
 
@@ -1564,24 +1602,6 @@ func GeneratePartitionModel(models map[string][]*GeoHashModel, center []float64,
 		Content:   glbbuf,
 	}
 	return builed, nil
-}
-
-// 根据层级估算 geometricError（你可根据瓦片大小调整）
-func getGeometricError(level int) float64 {
-	switch level {
-	case 2:
-		return 400
-	case 3:
-		return 200
-	case 4:
-		return 100
-	case 5:
-		return 50
-	case 6:
-		return 25
-	default:
-		return 25
-	}
 }
 
 func findRootGeohash(m map[string]*TileNode) string {

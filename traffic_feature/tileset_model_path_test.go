@@ -104,6 +104,60 @@ func TestBuildLODNodeChain(t *testing.T) {
 	}
 }
 
+func TestGeohashGeometricErrorUsesConfiguredLODBase(t *testing.T) {
+	cfg := &config.Config{LOD: config.TilesetLODConfig{
+		Enabled: true,
+		LOD0:    config.TilesetLODLevelConfig{ModelFolder: "lod0", GeometricError: 100},
+		LOD1:    config.TilesetLODLevelConfig{ModelFolder: "lod1", GeometricError: 40},
+		LOD2:    config.TilesetLODLevelConfig{ModelFolder: "lod2", GeometricError: 16},
+		LOD3:    config.TilesetLODLevelConfig{GeometricError: 0},
+	}}
+	levels := configuredTileLODLevels(cfg)
+	if len(levels) != 4 || levels[0].GeometricError != 100 || levels[1].GeometricError != 40 || levels[2].GeometricError != 16 || levels[3].GeometricError != 0 {
+		t.Fatalf("unexpected configured LOD levels: %+v", levels)
+	}
+	if got := geohashGeometricErrorBase(levels); got != 100 {
+		t.Fatalf("geohashGeometricErrorBase() = %v, want 100", got)
+	}
+
+	box := BoundingVolume{Box: [12]float64{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}}
+	lod0 := &TileNode{
+		BoundingVolume: box,
+		Content:        &TileContent{Uri: "lod0.glb"},
+		GeometricError: 100,
+		Refine:         "REPLACE",
+	}
+	geohashParent := &TileNode{
+		BoundingVolume: box,
+		Children:       []*TileNode{lod0},
+		Refine:         "ADD",
+	}
+	root := &TileNode{
+		BoundingVolume: box,
+		Children:       []*TileNode{geohashParent},
+		Refine:         "ADD",
+	}
+
+	refreshGeoHashTileBound(root, geohashGeometricErrorBase(levels))
+
+	if geohashParent.GeometricError != 200 {
+		t.Fatalf("Geohash parent geometricError = %v, want 200", geohashParent.GeometricError)
+	}
+	if root.GeometricError != 400 {
+		t.Fatalf("root geometricError = %v, want 400", root.GeometricError)
+	}
+	if lod0.GeometricError != 100 {
+		t.Fatalf("configured LOD0 geometricError changed to %v", lod0.GeometricError)
+	}
+}
+
+func TestGeohashGeometricErrorBaseFallsBackForZeroErrorLOD(t *testing.T) {
+	levels := []tileLODLevel{{Level: 3, GeometricError: 0}}
+	if got := geohashGeometricErrorBase(levels); got != 1 {
+		t.Fatalf("geohashGeometricErrorBase() = %v, want 1", got)
+	}
+}
+
 func TestLoadLocalLODModelsUsesDatabaseModelPath(t *testing.T) {
 	networkFolder := t.TempDir()
 	modelPath := filepath.Join(networkFolder, "lod1", "bridge", "simple.glb")
