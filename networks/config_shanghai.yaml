@@ -25,6 +25,20 @@ MinioOutput:
   SignGltfBucket: shanghai-g1503/models/sign
   DeviceGltfBucket: models/baseModels
 
+LOD:
+  Enabled: true
+  LOD0:
+    ModelFolder: lod0
+    GeometricError: 200
+  LOD1:
+    ModelFolder: lod1
+    GeometricError: 80
+  LOD2:
+    ModelFolder: lod2
+    GeometricError: 25
+  LOD3:
+    GeometricError: 0
+
 Tilesets:
   features:
     name: 设备设施
