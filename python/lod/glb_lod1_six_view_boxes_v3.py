@@ -471,15 +471,18 @@ def capture_materials(captures: dict[str, Path], transparent: bool,
         texture.image = image
         links.new(texture.outputs["Color"], principled.inputs["Base Color"])
         principled.inputs["Roughness"].default_value = 0.8
-        # Reuse the six-view capture as an emissive texture. Blender 4.x/5.x
-        # names this socket "Emission Color", while older versions use
-        # "Emission". The texture alpha remains connected only to Alpha below.
+        # Keep emission independent from the capture texture. This matches the
+        # brighter Blender-edited proxy materials: glTF exports a constant
+        # white emissiveFactor instead of multiplying emission by dark pixels
+        # in an emissiveTexture. The capture remains Base Color only.
+        # Blender 4.x/5.x names this socket "Emission Color"; older versions
+        # use "Emission".
         emission_color = principled.inputs.get("Emission Color")
         if emission_color is None:
             emission_color = principled.inputs.get("Emission")
         emission_strength_input = principled.inputs.get("Emission Strength")
         if emission_color is not None and emission_strength > 0:
-            links.new(texture.outputs["Color"], emission_color)
+            emission_color.default_value = (1.0, 1.0, 1.0, 1.0)
             if emission_strength_input is not None:
                 emission_strength_input.default_value = emission_strength
         if transparent:
@@ -629,8 +632,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alpha-cutoff", type=float, default=0.10,
                         help="alpha mask cutoff for transparent pixels (default: 0.10)")
     parser.add_argument(
-        "--emission-strength", type=float, default=0.35,
-        help="emission strength applied to six-view textures (default: 0.35)")
+        "--emission-strength", type=float, default=5.0,
+        help="constant white emission strength for box materials (default: 5.0)")
     parser.add_argument(
         "--transparent-top-bottom", action="store_true",
         help="skip top/bottom captures and export those two faces transparent")
