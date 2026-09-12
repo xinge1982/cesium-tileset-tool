@@ -166,15 +166,22 @@ func tileModelRelativePath(geohash string, lod int) string {
 }
 
 func configuredTileLODLevels(cfg *config.Config) []tileLODLevel {
-	if cfg == nil || !cfg.LOD.Enabled {
+	if cfg == nil {
 		return []tileLODLevel{{Level: 3, GeometricError: 0}}
+	}
+	if !cfg.LOD.Enabled {
+		return []tileLODLevel{{
+			Level:          3,
+			ModelFolder:    cfg.LOD.LOD3.ModelFolder,
+			GeometricError: cfg.LOD.LOD3.GeometricError,
+		}}
 	}
 
 	return []tileLODLevel{
 		{Level: 0, ModelFolder: cfg.LOD.LOD0.ModelFolder, GeometricError: cfg.LOD.LOD0.GeometricError},
 		{Level: 1, ModelFolder: cfg.LOD.LOD1.ModelFolder, GeometricError: cfg.LOD.LOD1.GeometricError},
 		{Level: 2, ModelFolder: cfg.LOD.LOD2.ModelFolder, GeometricError: cfg.LOD.LOD2.GeometricError},
-		{Level: 3, GeometricError: cfg.LOD.LOD3.GeometricError},
+		{Level: 3, ModelFolder: cfg.LOD.LOD3.ModelFolder, GeometricError: cfg.LOD.LOD3.GeometricError},
 	}
 }
 
@@ -231,7 +238,9 @@ func ensureLocalLODModelDirectories(cfg *config.Config, levels []tileLODLevel) e
 			if level.GeometricError != 0 {
 				return fmt.Errorf("LOD3 geometricError must be 0")
 			}
-			continue
+			if !cfg.LOD.LOD3.LocalFirst {
+				continue
+			}
 		}
 		root, err := localLODModelRoot(cfg, level)
 		if err != nil {
@@ -743,7 +752,12 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 				for _, lodLevel := range lodLevels {
 					lodModels := models
 					if lodLevel.Level < 3 {
-						lodModels, err2 = loadLocalLODModels(cfg, lodLevel, models, localModelCache)
+						if lodLevel.Level == 2 {
+							lodModels, err2 = loadLOD2ModelsBySource(
+								cfg, geoTable, lodLevel, models, localModelCache)
+						} else {
+							lodModels, err2 = loadLocalLODModels(cfg, lodLevel, models, localModelCache)
+						}
 						if err2 != nil {
 							results <- TileJobResult{err: err2}
 							builtLODs = nil
@@ -858,11 +872,10 @@ func loadLocalLODModels(cfg *config.Config, level tileLODLevel, source map[strin
 		}
 		modelName := instances[0].Model
 		tableName := instances[0].TableName
-		cleanName := filepath.Clean(filepath.FromSlash(strings.ReplaceAll(modelName, "\\", "/")))
-		if filepath.IsAbs(cleanName) || cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
-			return nil, fmt.Errorf("LOD%d model path escapes model folder: %s", level.Level, modelName)
+		modelPath, err := localLODModelPath(root, tableName, modelName, level.Level)
+		if err != nil {
+			return nil, err
 		}
-		modelPath := filepath.Join(root, tableName, cleanName)
 		cache.RLock()
 		gltfModel, cached := cache.models[modelPath]
 		cache.RUnlock()
@@ -894,6 +907,88 @@ func loadLocalLODModels(cfg *config.Config, level tileLODLevel, source map[strin
 		}
 	}
 	return result, nil
+}
+
+func localLODModelPath(root, tableName, modelName string, level int) (string, error) {
+	cleanTable := filepath.Clean(filepath.FromSlash(strings.ReplaceAll(tableName, "\\", "/")))
+	cleanName := filepath.Clean(filepath.FromSlash(strings.ReplaceAll(modelName, "\\", "/")))
+	for _, value := range []string{cleanTable, cleanName} {
+		if filepath.IsAbs(value) || value == "." || value == ".." ||
+			strings.HasPrefix(value, ".."+string(filepath.Separator)) {
+			return "", fmt.Errorf("LOD%d model path escapes model folder: %s/%s", level, tableName, modelName)
+		}
+	}
+	return filepath.Join(root, cleanTable, cleanName), nil
+}
+
+func loadLOD2ModelsBySource(cfg *config.Config, geoTable GeoTable, level tileLODLevel,
+	source map[string][]*GeoHashModel, cache *localLODModelCache) (map[string][]*GeoHashModel, error) {
+	result := make(map[string][]*GeoHashModel)
+	for _, instances := range source {
+		if len(instances) == 0 || instances[0] == nil {
+			continue
+		}
+		tableName := instances[0].TableName
+		mode := "local"
+		if sourceCfg, ok := geoTable.TilesetSources[tableName]; ok {
+			if configuredMode := strings.ToLower(strings.TrimSpace(sourceCfg.LOD.LOD2ModelMode)); configuredMode != "" {
+				mode = configuredMode
+			}
+		}
+
+		subset := make(map[string][]*GeoHashModel)
+		appendGeoHashModelsByGroup(subset, instances...)
+		switch mode {
+		case "local":
+			loaded, err := loadLocalLODModels(cfg, level, subset, cache)
+			if err != nil {
+				return nil, err
+			}
+			for _, models := range loaded {
+				appendGeoHashModelsByGroup(result, models...)
+			}
+		case "copy-lod3":
+			if err := copyLOD3ModelsToLocalLOD(cfg, level, instances, cache); err != nil {
+				return nil, err
+			}
+			appendGeoHashModelsByGroup(result, instances...)
+		case "reuse-lod3":
+			appendGeoHashModelsByGroup(result, instances...)
+		default:
+			return nil, fmt.Errorf("unsupported lod2ModelMode %q for table %s", mode, tableName)
+		}
+	}
+	return result, nil
+}
+
+func copyLOD3ModelsToLocalLOD(cfg *config.Config, level tileLODLevel,
+	instances []*GeoHashModel, cache *localLODModelCache) error {
+	if len(instances) == 0 || instances[0] == nil || instances[0].Gltf == nil {
+		return nil
+	}
+	root, err := localLODModelRoot(cfg, level)
+	if err != nil {
+		return err
+	}
+	model := instances[0]
+	modelPath, err := localLODModelPath(root, model.TableName, model.Model, level.Level)
+	if err != nil {
+		return err
+	}
+
+	cache.Lock()
+	defer cache.Unlock()
+	if _, cached := cache.models[modelPath]; cached {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(modelPath), 0755); err != nil {
+		return fmt.Errorf("create LOD%d model directory %s: %w", level.Level, filepath.Dir(modelPath), err)
+	}
+	if err := os.WriteFile(modelPath, model.Gltf.Content, 0644); err != nil {
+		return fmt.Errorf("write LOD%d model %s: %w", level.Level, modelPath, err)
+	}
+	cache.models[modelPath] = model.Gltf
+	return nil
 }
 
 func buildLODNodeChain(tile *GeoHashTile, lods []builtTileLOD, timestamp string) *TileNode {
@@ -1387,9 +1482,58 @@ func getModelContentFromMinio(db *gorm.DB, cfgName string, devices []*GeoHashMod
 	map[string][]*GeoHashModel, error) {
 	models := make(map[string][]*GeoHashModel)
 	code := config.EncodeContext(cfgName, "")
+	cfg := config.Instance()
+	localFirst := cfg != nil && cfg.LOD.LOD3.LocalFirst
+	minioFallback := cfg == nil || cfg.LOD.LOD3.MinioFallback
+	var localRoot string
+	var err error
+	if localFirst {
+		localRoot, err = localLODModelRoot(cfg, tileLODLevel{
+			Level:       3,
+			ModelFolder: cfg.LOD.LOD3.ModelFolder,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	localModels := make(map[string]*GltfModel)
 
 	clientMap := make(map[string]MinioBucket)
 	for _, device := range devices {
+		if localFirst {
+			modelPath, pathErr := localLODModelPath(localRoot, device.TableName, device.Model, 3)
+			if pathErr != nil {
+				return nil, pathErr
+			}
+			model, cached := localModels[modelPath]
+			if !cached {
+				content, readErr := os.ReadFile(modelPath)
+				if readErr == nil {
+					model = &GltfModel{
+						Name:        device.Model,
+						Content:     content,
+						ContentType: detectGltfFormat(content),
+					}
+				} else if !os.IsNotExist(readErr) {
+					return nil, fmt.Errorf("read LOD3 model %s: %w", modelPath, readErr)
+				}
+				localModels[modelPath] = model
+			}
+			if model != nil {
+				device.Gltf = model
+				appendGeoHashModelsByGroup(models, device)
+				continue
+			}
+			if !minioFallback {
+				log.Warnf("LOD3 local model not found, skip: %s", modelPath)
+				continue
+			}
+		}
+		if !minioFallback {
+			log.Warnf("LOD3 MinIO fallback disabled, skip model: %s/%s", device.TableName, device.Model)
+			continue
+		}
+
 		var client *minioconn.MinioConn
 		var bucketName string
 		var prefix string

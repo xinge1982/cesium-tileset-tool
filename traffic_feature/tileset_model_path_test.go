@@ -46,21 +46,82 @@ func TestGeoHashModelGroupKeyIncludesTableName(t *testing.T) {
 
 func TestEnsureLocalLODModelDirectories(t *testing.T) {
 	cfg := &config.Config{NetworkFolder: t.TempDir()}
+	cfg.LOD.LOD3.LocalFirst = true
 	levels := []tileLODLevel{
 		{Level: 0, ModelFolder: "lod0", GeometricError: 200},
 		{Level: 1, ModelFolder: "lod1", GeometricError: 80},
 		{Level: 2, ModelFolder: "lod2", GeometricError: 25},
-		{Level: 3, GeometricError: 0},
+		{Level: 3, ModelFolder: "lod3", GeometricError: 0},
 	}
 
 	if err := ensureLocalLODModelDirectories(cfg, levels); err != nil {
 		t.Fatal(err)
 	}
-	for _, folder := range []string{"lod0", "lod1", "lod2"} {
+	for _, folder := range []string{"lod0", "lod1", "lod2", "lod3"} {
 		info, err := os.Stat(filepath.Join(cfg.NetworkFolder, folder))
 		if err != nil || !info.IsDir() {
 			t.Fatalf("LOD model folder %q was not created", folder)
 		}
+	}
+}
+
+func TestLoadLOD2ModelsBySourceCopiesLOD3Model(t *testing.T) {
+	networkFolder := t.TempDir()
+	cfg := &config.Config{NetworkFolder: networkFolder}
+	level := tileLODLevel{Level: 2, ModelFolder: "lod2", GeometricError: 25}
+	original := &GeoHashModel{
+		Id: "1", TableName: "hdtraffic_sign", Model: "sign/simple.glb",
+		Gltf: &GltfModel{Name: "sign/simple.glb", Content: []byte("lod3-model")},
+	}
+	source := make(map[string][]*GeoHashModel)
+	appendGeoHashModelsByGroup(source, original)
+	geoTable := GeoTable{TilesetSources: map[string]config.TilesetSourceConfig{
+		"hdtraffic_sign": {LOD: config.TilesetSourceLODConfig{LOD2ModelMode: "copy-lod3"}},
+	}}
+	cache := &localLODModelCache{models: make(map[string]*GltfModel)}
+
+	loaded, err := loadLOD2ModelsBySource(cfg, geoTable, level, source, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected one copied model group, got %d", len(loaded))
+	}
+	modelPath := filepath.Join(networkFolder, "lod2", "hdtraffic_sign", "sign", "simple.glb")
+	content, err := os.ReadFile(modelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "lod3-model" {
+		t.Fatalf("unexpected copied model content %q", content)
+	}
+}
+
+func TestLoadLOD2ModelsBySourceReusesLOD3WithoutCopy(t *testing.T) {
+	networkFolder := t.TempDir()
+	cfg := &config.Config{NetworkFolder: networkFolder}
+	level := tileLODLevel{Level: 2, ModelFolder: "lod2", GeometricError: 25}
+	original := &GeoHashModel{
+		Id: "1", TableName: "hdgantry", Model: "gantry.glb",
+		Gltf: &GltfModel{Name: "gantry.glb", Content: []byte("lod3-model")},
+	}
+	source := make(map[string][]*GeoHashModel)
+	appendGeoHashModelsByGroup(source, original)
+	geoTable := GeoTable{TilesetSources: map[string]config.TilesetSourceConfig{
+		"hdgantry": {LOD: config.TilesetSourceLODConfig{LOD2ModelMode: "reuse-lod3"}},
+	}}
+	cache := &localLODModelCache{models: make(map[string]*GltfModel)}
+
+	loaded, err := loadLOD2ModelsBySource(cfg, geoTable, level, source, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected one reused model group, got %d", len(loaded))
+	}
+	modelPath := filepath.Join(networkFolder, "lod2", "hdgantry", "gantry.glb")
+	if _, err := os.Stat(modelPath); !os.IsNotExist(err) {
+		t.Fatalf("reuse-lod3 unexpectedly created %s", modelPath)
 	}
 }
 

@@ -573,7 +573,10 @@ func setTilesetLODDefaults(yaml *viper.Viper) {
 	yaml.SetDefault("LOD.LOD1.GeometricError", 80.0)
 	yaml.SetDefault("LOD.LOD2.ModelFolder", "lod2")
 	yaml.SetDefault("LOD.LOD2.GeometricError", 25.0)
+	yaml.SetDefault("LOD.LOD3.ModelFolder", "lod3")
 	yaml.SetDefault("LOD.LOD3.GeometricError", 0.0)
+	yaml.SetDefault("LOD.LOD3.LocalFirst", true)
+	yaml.SetDefault("LOD.LOD3.MinioFallback", true)
 }
 
 func (c *Config) GetMinioBucket(name string) string {
