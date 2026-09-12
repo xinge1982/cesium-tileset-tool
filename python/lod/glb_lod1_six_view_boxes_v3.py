@@ -401,7 +401,9 @@ def setup_render(resolution: int, background: float, transparent: bool) -> objec
 
 
 def render_views(model_bounds: Box, directory: Path, resolution: int,
-                 background: float, transparent: bool) -> tuple[dict[str, Path], dict[str, float]]:
+                 background: float, transparent: bool,
+                 transparent_top_bottom: bool = False
+                 ) -> tuple[dict[str, Path], dict[str, float]]:
     camera = setup_render(resolution, background, transparent)
     center = mul(add(model_bounds.minimum, model_bounds.maximum), 0.5)
     extents = sub(model_bounds.maximum, model_bounds.minimum)
@@ -412,6 +414,9 @@ def render_views(model_bounds: Box, directory: Path, resolution: int,
         projected_width = sum(abs(right[i]) * extents[i] for i in range(3))
         projected_height = sum(abs(camera_up[i]) * extents[i] for i in range(3))
         scale = max(projected_width, projected_height, 1e-4) * 1.02
+        scales[name] = scale
+        if transparent_top_bottom and name in {"top_py", "bottom_ny"}:
+            continue
         distance = max(extents) * 2.5 + 1.0
         position = sub(center, mul(direction, distance))
 
@@ -428,12 +433,32 @@ def render_views(model_bounds: Box, directory: Path, resolution: int,
         path = directory / f"{name}.png"
         bpy.context.scene.render.filepath = str(path)
         bpy.ops.render.render(write_still=True)
-        captures[name], scales[name] = path, scale
+        captures[name] = path
     return captures, scales
 
 
+def transparent_material(name: str) -> object:
+    material = bpy.data.materials.new(name)
+    material.use_nodes = True
+    principled = material.node_tree.nodes.get("Principled BSDF")
+    principled.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 0.0)
+    principled.inputs["Alpha"].default_value = 0.0
+    material.diffuse_color = (1.0, 1.0, 1.0, 0.0)
+    if hasattr(material, "blend_method"):
+        material.blend_method = "BLEND"
+    if hasattr(material, "surface_render_method"):
+        try:
+            material.surface_render_method = "DITHERED"
+        except (TypeError, ValueError):
+            pass
+    return material
+
+
 def capture_materials(captures: dict[str, Path], transparent: bool,
-                      alpha_cutoff: float) -> dict[str, object]:
+                      alpha_cutoff: float,
+                      emission_strength: float,
+                      transparent_top_bottom: bool = False
+                      ) -> dict[str, object]:
     materials: dict[str, object] = {}
     for name, path in captures.items():
         image = bpy.data.images.load(str(path), check_existing=False)
@@ -446,6 +471,17 @@ def capture_materials(captures: dict[str, Path], transparent: bool,
         texture.image = image
         links.new(texture.outputs["Color"], principled.inputs["Base Color"])
         principled.inputs["Roughness"].default_value = 0.8
+        # Reuse the six-view capture as an emissive texture. Blender 4.x/5.x
+        # names this socket "Emission Color", while older versions use
+        # "Emission". The texture alpha remains connected only to Alpha below.
+        emission_color = principled.inputs.get("Emission Color")
+        if emission_color is None:
+            emission_color = principled.inputs.get("Emission")
+        emission_strength_input = principled.inputs.get("Emission Strength")
+        if emission_color is not None and emission_strength > 0:
+            links.new(texture.outputs["Color"], emission_color)
+            if emission_strength_input is not None:
+                emission_strength_input.default_value = emission_strength
         if transparent:
             # Encode a binary alpha mask in the node graph. Blender 4.2+
             # glTF exporters recognize Greater Than -> Principled Alpha as
@@ -472,6 +508,9 @@ def capture_materials(captures: dict[str, Path], transparent: bool,
                 except (TypeError, ValueError):
                     pass
         materials[name] = material
+    if transparent_top_bottom:
+        materials["top_py"] = transparent_material("lod1_transparent_top")
+        materials["bottom_ny"] = transparent_material("lod1_transparent_bottom")
     return materials
 
 
@@ -547,7 +586,9 @@ def export_proxies(path: Path, proxies: list[object]) -> None:
 
 def convert(source: Path, destination: Path, opt: Options, resolution: int,
             background: float, allow_transparent_gantry: bool,
-            alpha_cutoff: float) -> tuple[str, int]:
+            alpha_cutoff: float,
+            emission_strength: float,
+            transparent_top_bottom: bool = False) -> tuple[str, int]:
     reset_scene()
     original_objects, vertices = import_glb(source)
     proxy_boxes, strategy = build_boxes(vertices, opt)
@@ -557,8 +598,11 @@ def convert(source: Path, destination: Path, opt: Options, resolution: int,
     transparent = allow_transparent_gantry and strategy == "two_post_gantry"
     with tempfile.TemporaryDirectory(prefix="lod1_six_views_") as temporary:
         captures, scales = render_views(
-            model_bounds, Path(temporary), resolution, background, transparent)
-        materials = capture_materials(captures, transparent, alpha_cutoff)
+            model_bounds, Path(temporary), resolution, background, transparent,
+            transparent_top_bottom)
+        materials = capture_materials(
+            captures, transparent, alpha_cutoff, emission_strength,
+            transparent_top_bottom)
         for obj in original_objects:
             obj.hide_render = True
         proxies = [create_textured_box(i, box, model_bounds, scales, materials, strategy)
@@ -584,6 +628,12 @@ def parse_args() -> argparse.Namespace:
                         help="force gantries to use --background instead of transparency")
     parser.add_argument("--alpha-cutoff", type=float, default=0.10,
                         help="alpha mask cutoff for transparent pixels (default: 0.10)")
+    parser.add_argument(
+        "--emission-strength", type=float, default=0.35,
+        help="emission strength applied to six-view textures (default: 0.35)")
+    parser.add_argument(
+        "--transparent-top-bottom", action="store_true",
+        help="skip top/bottom captures and export those two faces transparent")
     return parser.parse_args(argv)
 
 
@@ -594,9 +644,10 @@ def main() -> int:
         print(f"error: input directory does not exist: {input_dir}", file=sys.stderr)
         return 2
     if (args.slice_count <= 0 or args.resolution < 32 or
-            not 0 <= args.background <= 1 or not 0 <= args.alpha_cutoff <= 1):
-        print("error: invalid slice-count, resolution, background, or alpha-cutoff",
-              file=sys.stderr)
+            not 0 <= args.background <= 1 or
+            not 0 <= args.alpha_cutoff <= 1 or args.emission_strength < 0):
+        print("error: invalid slice-count, resolution, background, alpha-cutoff, "
+              "or emission-strength", file=sys.stderr)
         return 2
     pattern = "**/*.glb" if args.recursive else "*.glb"
     sources = sorted(path for path in input_dir.glob(pattern) if path.is_file())
@@ -614,7 +665,8 @@ def main() -> int:
         try:
             strategy, count = convert(
                 source, destination, opt, args.resolution, args.background,
-                not args.opaque_background, args.alpha_cutoff)
+                not args.opaque_background, args.alpha_cutoff,
+                args.emission_strength, args.transparent_top_bottom)
             succeeded += 1
             texture_mode = ("transparent-mask" if strategy == "two_post_gantry"
                             and not args.opaque_background else "opaque-background")
