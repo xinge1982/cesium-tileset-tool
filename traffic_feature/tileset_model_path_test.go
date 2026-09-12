@@ -125,6 +125,46 @@ func TestLoadLOD2ModelsBySourceReusesLOD3WithoutCopy(t *testing.T) {
 	}
 }
 
+func TestResolveLOD2ModelModeByPrefix(t *testing.T) {
+	lod := config.TilesetSourceLODConfig{
+		LOD2ModelMode:     "copy-lod3-by-prefix",
+		LOD2ModelPrefixes: []string{"sxj_", "device/camera/"},
+		LOD2UnmatchedMode: "local",
+	}
+	tests := []struct {
+		name      string
+		modelName string
+		want      string
+	}{
+		{name: "file prefix", modelName: "sxj_camera.glb", want: "copy-lod3"},
+		{name: "path prefix", modelName: "device/camera/model.glb", want: "copy-lod3"},
+		{name: "windows path", modelName: `device\camera\model.glb`, want: "copy-lod3"},
+		{name: "unmatched", modelName: "other/model.glb", want: "local"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveLOD2ModelMode(lod, tt.modelName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("resolveLOD2ModelMode(%q) = %q, want %q", tt.modelName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveLOD2ModelModeRejectsInvalidUnmatchedMode(t *testing.T) {
+	lod := config.TilesetSourceLODConfig{
+		LOD2ModelMode:     "copy-lod3-by-prefix",
+		LOD2ModelPrefixes: []string{"sxj_"},
+		LOD2UnmatchedMode: "invalid",
+	}
+	if _, err := resolveLOD2ModelMode(lod, "other.glb"); err == nil {
+		t.Fatal("expected invalid lod2UnmatchedMode to be rejected")
+	}
+}
+
 func TestEnsureLocalLODModelDirectoriesRejectsInvalidErrors(t *testing.T) {
 	cfg := &config.Config{NetworkFolder: t.TempDir()}
 	levels := []tileLODLevel{

@@ -929,11 +929,14 @@ func loadLOD2ModelsBySource(cfg *config.Config, geoTable GeoTable, level tileLOD
 			continue
 		}
 		tableName := instances[0].TableName
-		mode := "local"
+		sourceLOD := config.TilesetSourceLODConfig{}
 		if sourceCfg, ok := geoTable.TilesetSources[tableName]; ok {
-			if configuredMode := strings.ToLower(strings.TrimSpace(sourceCfg.LOD.LOD2ModelMode)); configuredMode != "" {
-				mode = configuredMode
-			}
+			sourceLOD = sourceCfg.LOD
+		}
+		mode, err := resolveLOD2ModelMode(sourceLOD, instances[0].Model)
+		if err != nil {
+			return nil, fmt.Errorf("resolve LOD2 model mode for table %s model %s: %w",
+				tableName, instances[0].Model, err)
 		}
 
 		subset := make(map[string][]*GeoHashModel)
@@ -954,11 +957,43 @@ func loadLOD2ModelsBySource(cfg *config.Config, geoTable GeoTable, level tileLOD
 			appendGeoHashModelsByGroup(result, instances...)
 		case "reuse-lod3":
 			appendGeoHashModelsByGroup(result, instances...)
+		case "skip":
+			continue
 		default:
 			return nil, fmt.Errorf("unsupported lod2ModelMode %q for table %s", mode, tableName)
 		}
 	}
 	return result, nil
+}
+
+func resolveLOD2ModelMode(lod config.TilesetSourceLODConfig, modelName string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(lod.LOD2ModelMode))
+	if mode == "" {
+		return "local", nil
+	}
+	if mode != "copy-lod3-by-prefix" {
+		return mode, nil
+	}
+
+	normalizedModel := path.Clean(strings.ReplaceAll(strings.TrimSpace(modelName), "\\", "/"))
+	for _, configuredPrefix := range lod.LOD2ModelPrefixes {
+		prefix := strings.ReplaceAll(strings.TrimSpace(configuredPrefix), "\\", "/")
+		prefix = strings.TrimPrefix(prefix, "./")
+		if prefix != "" && strings.HasPrefix(normalizedModel, prefix) {
+			return "copy-lod3", nil
+		}
+	}
+
+	unmatchedMode := strings.ToLower(strings.TrimSpace(lod.LOD2UnmatchedMode))
+	if unmatchedMode == "" {
+		unmatchedMode = "local"
+	}
+	switch unmatchedMode {
+	case "local", "reuse-lod3", "skip":
+		return unmatchedMode, nil
+	default:
+		return "", fmt.Errorf("unsupported lod2UnmatchedMode %q", unmatchedMode)
+	}
 }
 
 func copyLOD3ModelsToLocalLOD(cfg *config.Config, level tileLODLevel,
