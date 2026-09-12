@@ -117,7 +117,11 @@ Tilesets:
         name: 设备
 
         lod:
-          lod2ModelMode: local
+          lod2ModelMode: copy-lod3-by-prefix
+          lod2ModelPrefixes:
+            - sxj_
+            - dld_
+          lod2UnmatchedMode: local
 
         match:
           operator: prefix
