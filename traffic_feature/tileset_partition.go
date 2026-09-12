@@ -1,6 +1,7 @@
 package traffic_feature
 
 import (
+	"cesium-tileset-tool/config"
 	"cesium-tileset-tool/utils"
 	"context"
 	"fmt"
@@ -38,6 +39,7 @@ type GeoTable struct {
 	PartitionTableName string
 	GeoTableNames      []string
 	Threshold          int
+	TilesetSources     map[string]config.TilesetSourceConfig
 }
 
 const (

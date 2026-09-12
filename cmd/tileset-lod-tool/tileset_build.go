@@ -153,13 +153,15 @@ func (g *FeatureTileSetBuildCommand) Run() error {
 
 	var db = conn.DB
 	var geoTable = traffic_feature.GeoTable{
-		Threshold: 50,
+		Threshold:      50,
+		TilesetSources: make(map[string]config.TilesetSourceConfig),
 	}
 	for _, tc := range config.Instance().Tilesets {
 		if tc.Type == "features" {
 			geoTable.PartitionTableName = tc.Partition.Table
 			for _, source := range tc.Sources {
 				geoTable.GeoTableNames = append(geoTable.GeoTableNames, source.Table.Name)
+				geoTable.TilesetSources[source.Table.Name] = source
 			}
 		}
 	}

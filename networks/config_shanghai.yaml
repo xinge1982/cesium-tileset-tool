@@ -37,7 +37,10 @@ LOD:
     ModelFolder: lod2
     GeometricError: 0.6
   LOD3:
+    ModelFolder: lod3
     GeometricError: 0
+    LocalFirst: true
+    MinioFallback: true
 
 Tilesets:
   features:
@@ -55,6 +58,9 @@ Tilesets:
     sources:
       - id: sign
         name: 标志牌
+
+        lod:
+          lod2ModelMode: copy-lod3
 
         match:
           operator: prefix
@@ -110,6 +116,9 @@ Tilesets:
       - id: device
         name: 设备
 
+        lod:
+          lod2ModelMode: local
+
         match:
           operator: prefix
           value: hdtraffic_ene
@@ -164,6 +173,9 @@ Tilesets:
       - id: gantry
         name: 门架
 
+        lod:
+          lod2ModelMode: copy-lod3
+
         match:
           operator: prefix
           value: hdgantry
@@ -217,6 +229,9 @@ Tilesets:
 
       - id: pole
         name: 标志杆
+
+        lod:
+          lod2ModelMode: copy-lod3
 
         match:
           operator: prefix

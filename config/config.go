@@ -103,6 +103,22 @@ type PhotoListQueryOption struct {
 type TilesetLODLevelConfig struct {
 	ModelFolder    string
 	GeometricError float64
+	LocalFirst     bool
+	MinioFallback  bool
+}
+
+type TilesetSourceLODConfig struct {
+	LOD2ModelMode string `yaml:"lod2ModelMode" json:"lod2ModelMode"`
+}
+
+type TilesetSourceConfig struct {
+	ID         string                 `yaml:"id" json:"id"`
+	Name       string                 `yaml:"name" json:"name"`
+	Match      MatchConfig            `yaml:"match" json:"match"`
+	KeyMapping *KeyMappingConfig      `yaml:"keyMapping,omitempty" json:"keyMapping,omitempty"`
+	Table      TableConfig            `yaml:"table" json:"table"`
+	LOD        TilesetSourceLODConfig `yaml:"lod" json:"lod"`
+	Fields     []FieldConfig          `yaml:"fields" json:"fields"`
 }
 
 type TilesetLODConfig struct {
@@ -274,15 +290,6 @@ type ZClipConfig struct {
 type FeatureConfig struct {
 	IDField        string `yaml:"idField" json:"idField"`
 	FeatureIdField string `yaml:"featureIdField" json:"featureIdField"` //数据对应tileset的字段值列名称
-}
-
-type TilesetSourceConfig struct {
-	ID         string            `yaml:"id" json:"id"`
-	Name       string            `yaml:"name" json:"name"`
-	Match      MatchConfig       `yaml:"match" json:"match"`
-	KeyMapping *KeyMappingConfig `yaml:"keyMapping,omitempty" json:"keyMapping,omitempty"`
-	Table      TableConfig       `yaml:"table" json:"table"`
-	Fields     []FieldConfig     `yaml:"fields" json:"fields"`
 }
 
 type MatchConfig struct {
