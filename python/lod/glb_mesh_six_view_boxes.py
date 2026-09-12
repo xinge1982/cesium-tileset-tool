@@ -216,7 +216,8 @@ def render_six_views(source: SourceMesh, sources: list[SourceMesh], camera: obje
 
 
 def build_capture_materials(captures: dict[str, Path], prefix: str,
-                            transparent: bool, alpha_cutoff: float) -> dict[str, object]:
+                            transparent: bool, alpha_cutoff: float,
+                            emission_strength: float) -> dict[str, object]:
     result: dict[str, object] = {}
     for view_name, path in captures.items():
         image = bpy.data.images.load(str(path), check_existing=False)
@@ -230,6 +231,16 @@ def build_capture_materials(captures: dict[str, Path], prefix: str,
         texture.image = image
         links.new(texture.outputs["Color"], principled.inputs["Base Color"])
         principled.inputs["Roughness"].default_value = 0.8
+        # Blender 4.x/5.x calls this socket "Emission Color"; older Blender
+        # versions use "Emission". Reuse the capture as the emissive texture so
+        # the exported GLB stays readable in Cesium without changing its alpha.
+        emission_color = (principled.inputs.get("Emission Color") or
+                          principled.inputs.get("Emission"))
+        emission_strength_input = principled.inputs.get("Emission Strength")
+        if emission_color is not None and emission_strength > 0:
+            links.new(texture.outputs["Color"], emission_color)
+            if emission_strength_input is not None:
+                emission_strength_input.default_value = emission_strength
         if transparent:
             mask = nodes.new("ShaderNodeMath")
             mask.operation = "GREATER_THAN"
@@ -312,7 +323,7 @@ def export_boxes(path: Path, boxes: list[object]) -> None:
 
 def convert_file(source_path: Path, output_path: Path, resolution: int,
                  background: float, transparent: bool,
-                 alpha_cutoff: float) -> int:
+                 alpha_cutoff: float, emission_strength: float) -> int:
     reset_scene()
     sources = import_source_meshes(source_path)
     camera, lights = setup_renderer(resolution, background, transparent)
@@ -326,7 +337,8 @@ def convert_file(source_path: Path, output_path: Path, resolution: int,
                 source, sources, camera, lights, mesh_dir)
             prefix = f"mesh_{index:04d}_{safe_name(source.name)}"
             materials = build_capture_materials(
-                captures, prefix, transparent, alpha_cutoff)
+                captures, prefix, transparent, alpha_cutoff,
+                emission_strength)
             boxes.append(create_box(source, index, scales, materials))
         for source in sources:
             source.obj.hide_render = True
@@ -346,6 +358,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--background", type=float, default=0.65)
     parser.add_argument("--transparent-background", action="store_true")
     parser.add_argument("--alpha-cutoff", type=float, default=0.10)
+    parser.add_argument(
+        "--emission-strength", type=float, default=0.35,
+        help="emission strength applied to six-view textures (default: 0.35)")
     return parser.parse_args(argv)
 
 
@@ -356,8 +371,9 @@ def main() -> int:
         print(f"error: input directory does not exist: {input_dir}", file=sys.stderr)
         return 2
     if (args.resolution < 32 or not 0 <= args.background <= 1 or
-            not 0 <= args.alpha_cutoff <= 1):
-        print("error: invalid resolution, background, or alpha-cutoff", file=sys.stderr)
+            not 0 <= args.alpha_cutoff <= 1 or args.emission_strength < 0):
+        print("error: invalid resolution, background, alpha-cutoff, or "
+              "emission-strength", file=sys.stderr)
         return 2
     pattern = "**/*.glb" if args.recursive else "*.glb"
     sources = sorted(path for path in input_dir.glob(pattern) if path.is_file())
@@ -376,7 +392,8 @@ def main() -> int:
         try:
             count = convert_file(
                 source, destination, args.resolution, args.background,
-                args.transparent_background, args.alpha_cutoff)
+                args.transparent_background, args.alpha_cutoff,
+                args.emission_strength)
             succeeded += 1
             mode = "transparent-mask" if args.transparent_background else "opaque-background"
             print(f"OK   {relative} -> {destination} [{count} Mesh Objects, "

@@ -433,7 +433,8 @@ def render_views(model_bounds: Box, directory: Path, resolution: int,
 
 
 def capture_materials(captures: dict[str, Path], transparent: bool,
-                      alpha_cutoff: float) -> dict[str, object]:
+                      alpha_cutoff: float,
+                      emission_strength: float) -> dict[str, object]:
     materials: dict[str, object] = {}
     for name, path in captures.items():
         image = bpy.data.images.load(str(path), check_existing=False)
@@ -446,6 +447,17 @@ def capture_materials(captures: dict[str, Path], transparent: bool,
         texture.image = image
         links.new(texture.outputs["Color"], principled.inputs["Base Color"])
         principled.inputs["Roughness"].default_value = 0.8
+        # Reuse the six-view capture as an emissive texture. Blender 4.x/5.x
+        # names this socket "Emission Color", while older versions use
+        # "Emission". The texture alpha remains connected only to Alpha below.
+        emission_color = principled.inputs.get("Emission Color")
+        if emission_color is None:
+            emission_color = principled.inputs.get("Emission")
+        emission_strength_input = principled.inputs.get("Emission Strength")
+        if emission_color is not None and emission_strength > 0:
+            links.new(texture.outputs["Color"], emission_color)
+            if emission_strength_input is not None:
+                emission_strength_input.default_value = emission_strength
         if transparent:
             # Encode a binary alpha mask in the node graph. Blender 4.2+
             # glTF exporters recognize Greater Than -> Principled Alpha as
@@ -547,7 +559,8 @@ def export_proxies(path: Path, proxies: list[object]) -> None:
 
 def convert(source: Path, destination: Path, opt: Options, resolution: int,
             background: float, allow_transparent_gantry: bool,
-            alpha_cutoff: float) -> tuple[str, int]:
+            alpha_cutoff: float,
+            emission_strength: float) -> tuple[str, int]:
     reset_scene()
     original_objects, vertices = import_glb(source)
     proxy_boxes, strategy = build_boxes(vertices, opt)
@@ -558,7 +571,8 @@ def convert(source: Path, destination: Path, opt: Options, resolution: int,
     with tempfile.TemporaryDirectory(prefix="lod1_six_views_") as temporary:
         captures, scales = render_views(
             model_bounds, Path(temporary), resolution, background, transparent)
-        materials = capture_materials(captures, transparent, alpha_cutoff)
+        materials = capture_materials(
+            captures, transparent, alpha_cutoff, emission_strength)
         for obj in original_objects:
             obj.hide_render = True
         proxies = [create_textured_box(i, box, model_bounds, scales, materials, strategy)
@@ -584,6 +598,9 @@ def parse_args() -> argparse.Namespace:
                         help="force gantries to use --background instead of transparency")
     parser.add_argument("--alpha-cutoff", type=float, default=0.10,
                         help="alpha mask cutoff for transparent pixels (default: 0.10)")
+    parser.add_argument(
+        "--emission-strength", type=float, default=5.0,
+        help="emission strength applied to six-view textures (default: 0.35)")
     return parser.parse_args(argv)
 
 
@@ -594,9 +611,10 @@ def main() -> int:
         print(f"error: input directory does not exist: {input_dir}", file=sys.stderr)
         return 2
     if (args.slice_count <= 0 or args.resolution < 32 or
-            not 0 <= args.background <= 1 or not 0 <= args.alpha_cutoff <= 1):
-        print("error: invalid slice-count, resolution, background, or alpha-cutoff",
-              file=sys.stderr)
+            not 0 <= args.background <= 1 or
+            not 0 <= args.alpha_cutoff <= 1 or args.emission_strength < 0):
+        print("error: invalid slice-count, resolution, background, alpha-cutoff, "
+              "or emission-strength", file=sys.stderr)
         return 2
     pattern = "**/*.glb" if args.recursive else "*.glb"
     sources = sorted(path for path in input_dir.glob(pattern) if path.is_file())
@@ -614,7 +632,8 @@ def main() -> int:
         try:
             strategy, count = convert(
                 source, destination, opt, args.resolution, args.background,
-                not args.opaque_background, args.alpha_cutoff)
+                not args.opaque_background, args.alpha_cutoff,
+                args.emission_strength)
             succeeded += 1
             texture_mode = ("transparent-mask" if strategy == "two_post_gantry"
                             and not args.opaque_background else "opaque-background")
