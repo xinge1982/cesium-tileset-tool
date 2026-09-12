@@ -152,6 +152,22 @@ func (g *FeatureTileSetBuildCommand) Run() error {
 	}
 
 	var db = conn.DB
+	var geoTable = traffic_feature.GeoTable{
+		Threshold: 50,
+	}
+	for _, tc := range config.Instance().Tilesets {
+		if tc.Type == "features" {
+			geoTable.PartitionTableName = tc.Partition.Table
+			for _, source := range tc.Sources {
+				geoTable.GeoTableNames = append(geoTable.GeoTableNames, source.Table.Name)
+			}
+		}
+	}
+
+	traffic_feature.AllTiles = []traffic_feature.GeoTable{
+		geoTable,
+	}
+
 	if err := traffic_feature.InitTileSetTables(db, cfg.Bound); err != nil {
 		log.Fatal(err)
 	}

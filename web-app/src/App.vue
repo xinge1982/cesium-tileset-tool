@@ -999,6 +999,8 @@ onMounted(() => {
   viewer.scene.globe.depthTestAgainstTerrain = false
   viewer.scene.requestRenderMode = true
 
+  viewer.scene.globe.enableLighting = false
+
   mousePositionHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
   mousePositionHandler.setInputAction((movement: Cesium.ScreenSpaceEventHandler.MotionEvent) => {
     updateMouseCoordinates(pickPositionStable(movement.endPosition))

@@ -47,6 +47,8 @@ Tilesets:
     enabled: true
     maintainable: true
     order: 1
+    partition:
+      table: t_tileset_partition_features
     feature:
       idField: id
       sourceField: id
@@ -270,7 +272,7 @@ Tilesets:
   buildings:
     name: 建筑
     url: https://tileset.amap3d.online:48611/share/shanghai_g1503/features/tileset.json
-    type: features
+    type: building
     enabled: true
     maintainable: true
     order: 3

@@ -60,9 +60,7 @@ type TileSetModel struct {
 // PartitionTableName 设置表名
 // 复用 TileSetPartition
 
-var AllTiles = []GeoTable{
-	TileSetPartition{}.TableNameForFeatures(),
-}
+var AllTiles = []GeoTable{}
 
 const (
 	SignTileTableName   string = "hdtraffic_sign"
@@ -75,46 +73,6 @@ const (
 
 	MAX_TILE_MODEL_COUNT int = 100
 )
-
-func (TileSetPartition) TableNameForFeatures() GeoTable {
-	return GeoTable{
-		PartitionTableName: "t_tileset_partition_features",
-		GeoTableNames:      []string{SignTileTableName, DeviceTileTableName, PoleTileTableName, GantryTileTableName},
-		Threshold:          50,
-	}
-}
-
-func (TileSetPartition) TableNameForDevice() GeoTable {
-	return GeoTable{
-		PartitionTableName: "t_tileset_partition_device",
-		GeoTableNames:      []string{DeviceTileTableName},
-		Threshold:          100,
-	}
-}
-
-func (TileSetPartition) TableNameForPole() GeoTable {
-	return GeoTable{
-		PartitionTableName: "t_tileset_partition_pole",
-		GeoTableNames:      []string{PoleTileTableName},
-		Threshold:          100,
-	}
-}
-
-func (TileSetPartition) TableNameForGantry() GeoTable {
-	return GeoTable{
-		PartitionTableName: "t_tileset_partition_gantry",
-		GeoTableNames:      []string{GantryTileTableName},
-		Threshold:          100,
-	}
-}
-
-func (TileSetPartition) TableNameForSign() GeoTable {
-	return GeoTable{
-		PartitionTableName: "t_tileset_partition_sign",
-		GeoTableNames:      []string{SignTileTableName},
-		Threshold:          100,
-	}
-}
 
 func initTileSetPartitions(db *gorm.DB, minLng, minLat, maxLng, maxLat float64, tableName string, level int16) error {
 	// 示例：初始化根级分片

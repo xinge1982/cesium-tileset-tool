@@ -4,6 +4,7 @@ import (
 	"cesium-tileset-tool/mapmodel/aabb"
 	"cesium-tileset-tool/mapmodel/mergeone"
 	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/qmuntal/gltf"
@@ -104,4 +105,40 @@ func f32(f [3]float64) [3]float32 {
 }
 func f32_4(f [4]float64) [4]float32 {
 	return [4]float32{float32(f[0]), float32(f[1]), float32(f[2]), float32(f[3])}
+}
+
+func normalizeMaterialAlphaModes(doc *gltf.Document) error {
+	for i, material := range doc.Materials {
+		if material == nil {
+			continue
+		}
+
+		if material.AlphaCutoff != nil {
+			switch material.AlphaMode {
+			case gltf.AlphaMask:
+				// Valid: alphaCutoff is meaningful with MASK.
+
+			case gltf.AlphaOpaque:
+				// The source GLB declares MASK, so restore it.
+				material.AlphaMode = gltf.AlphaMask
+
+			case gltf.AlphaBlend:
+				return fmt.Errorf(
+					"material[%d] %q has alphaCutoff but alphaMode is BLEND",
+					i,
+					material.Name,
+				)
+
+			default:
+				return fmt.Errorf(
+					"material[%d] %q has invalid alphaMode %d",
+					i,
+					material.Name,
+					material.AlphaMode,
+				)
+			}
+		}
+	}
+
+	return nil
 }

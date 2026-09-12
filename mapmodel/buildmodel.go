@@ -132,10 +132,17 @@ func (bm *BuildModels) BuildBinary() ([]byte, error) {
 	//	wrapUnderRootWithMatrix(bm.doc, bm.Transform())
 	//}
 
+	//if errM := normalizeMaterialAlphaModes(bm.doc); errM != nil {
+	//	return nil, errM
+	//}
+
 	buff := new(bytes.Buffer)
 	e := gltf.NewEncoder(buff)
 	e.AsBinary = true
 	err = e.Encode(bm.doc)
+	if err != nil {
+		return nil, err
+	}
 	return buff.Bytes(), err
 
 }
@@ -323,21 +330,32 @@ func SwitchToPBRWithGlowTextureAware(doc *gltf.Document, emissiveLevel, baseColo
 		if m.Extensions != nil {
 			delete(m.Extensions, "KHR_materials_unlit")
 		}
-		m.AlphaMode = gltf.AlphaOpaque
+
+		// 不要修改 AlphaMode 和 AlphaCutoff。
+		// 保留原模型的 OPAQUE、MASK 或 BLEND。
+		//
+		//m.AlphaMode = gltf.AlphaOpaque
 
 		// 基础 PBR 设置
 		if m.PBRMetallicRoughness == nil {
 			m.PBRMetallicRoughness = &gltf.PBRMetallicRoughness{}
 		}
+
 		// 轻微调整基色亮度（只调 RGB，不动 A）
 		c := m.PBRMetallicRoughness.BaseColorFactor
 		if c == nil {
 			c = &[4]float64{1, 1, 1, 1}
 		}
-		c[0], c[1], c[2] = clamp01(c[0]*baseColorScale), clamp01(c[1]*baseColorScale), clamp01(c[2]*baseColorScale)
-		if c[3] == 0 {
-			c[3] = 1
-		}
+		//c[0], c[1], c[2] = clamp01(c[0]*baseColorScale), clamp01(c[1]*baseColorScale), clamp01(c[2]*baseColorScale)
+		//if c[3] == 0 {
+		//	c[3] = 1
+		//}
+
+		// 只调整 RGB，绝对不修改 Alpha。
+		c[0] = clamp01(c[0] * baseColorScale)
+		c[1] = clamp01(c[1] * baseColorScale)
+		c[2] = clamp01(c[2] * baseColorScale)
+
 		m.PBRMetallicRoughness.BaseColorFactor = c
 
 		// 非金属 & 适中粗糙，避免场景无 IBL 时过黑

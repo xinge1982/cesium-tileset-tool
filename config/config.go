@@ -254,11 +254,16 @@ type TilesetConfig struct {
 	Type         string                `yaml:"type" json:"type"`
 	Enabled      bool                  `yaml:"enabled" json:"enabled"`
 	Maintainable bool                  `yaml:"maintainable" json:"maintainable"`
+	Partition    Partition             `yaml:"partition" json:"partition"`
 	ZClip        ZClipConfig           `yaml:"zclip" json:"zclip"`
 	Order        int                   `yaml:"order" json:"order"`
 	Feature      FeatureConfig         `yaml:"feature" json:"feature"`
 	Sources      []TilesetSourceConfig `yaml:"sources" json:"sources"`
 	Options      [][]string            `yaml:"options" json:"options"`
+}
+
+type Partition struct {
+	Table string `yaml:"table" json:"table"`
 }
 
 type ZClipConfig struct {
