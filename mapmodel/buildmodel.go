@@ -125,7 +125,7 @@ func (bm *BuildModels) BuildBinary() ([]byte, error) {
 		return nil, err
 	}
 	//加亮
-	SwitchToPBRWithGlowTextureAware(bm.doc, 0.35, 0.9)
+	//SwitchToPBRWithGlowTextureAware(bm.doc, 0.35, 0.9)
 	// 3) buffers[0].URI 置空；byteLength = BIN chunk 实际长度
 
 	//if bm.opt.RootNode {
