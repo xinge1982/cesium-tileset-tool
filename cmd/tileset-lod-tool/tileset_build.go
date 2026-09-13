@@ -24,7 +24,7 @@ func NewFeatureTileSetBuildCommand() *FeatureTileSetBuildCommand {
 
 	gc.fs.StringVar(&gc.path, "c", "config.yaml", "path of config file")
 	gc.fs.StringVar(&gc.outputPath, "output-path", "tilesets", "output tileset path")
-	gc.fs.StringVar(&gc.partitionTable, "partition-table", "", "tileset partition table name")
+	gc.fs.StringVar(&gc.tilesetType, "tileset-type", "features", "output tileset type")
 	gc.fs.BoolVar(&gc.removeModel, "remove-model", false, "remove model")
 
 	return gc
@@ -33,10 +33,10 @@ func NewFeatureTileSetBuildCommand() *FeatureTileSetBuildCommand {
 type FeatureTileSetBuildCommand struct {
 	fs *flag.FlagSet
 
-	path           string
-	outputPath     string
-	partitionTable string
-	removeModel    bool
+	path        string
+	outputPath  string
+	removeModel bool
+	tilesetType string
 }
 
 func (g *FeatureTileSetBuildCommand) Name() string {
@@ -86,7 +86,7 @@ func (g *FeatureTileSetBuildCommand) Run() error {
 			break
 		}
 	}
-	log.Infof("begin build tileset to %s of table %s in project %s", g.outputPath, g.partitionTable, configName)
+	log.Infof("begin build tileset to %s of type %s in project %s", g.outputPath, g.tilesetType, configName)
 
 	if g.removeModel {
 		client := minioconn.GetMinioConn(configName)
@@ -157,13 +157,17 @@ func (g *FeatureTileSetBuildCommand) Run() error {
 		TilesetSources: make(map[string]config.TilesetSourceConfig),
 	}
 	for _, tc := range config.Instance().Tilesets {
-		if tc.Type == "features" {
+		if tc.Type == g.tilesetType {
 			geoTable.PartitionTableName = tc.Partition.Table
 			for _, source := range tc.Sources {
 				geoTable.GeoTableNames = append(geoTable.GeoTableNames, source.Table.Name)
 				geoTable.TilesetSources[source.Table.Name] = source
 			}
 		}
+	}
+
+	if len(geoTable.GeoTableNames) == 0 {
+		log.Fatal(fmt.Errorf("error in config file, geoTable empty"))
 	}
 
 	traffic_feature.AllTiles = []traffic_feature.GeoTable{
@@ -179,7 +183,7 @@ func (g *FeatureTileSetBuildCommand) Run() error {
 		return errR
 	}
 
-	_, err := traffic_feature.GenerateAllGeoHashTile(configName, g.partitionTable, g.outputPath)
+	_, err := traffic_feature.GenerateAllGeoHashTile(configName, geoTable.PartitionTableName, g.outputPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -187,7 +191,7 @@ func (g *FeatureTileSetBuildCommand) Run() error {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Infof("✅ Command feature-tileset-build success of table %s in project %s ", g.partitionTable, configName)
+	log.Infof("✅ Command feature-tileset-build success of table %s in project %s ", geoTable.PartitionTableName, configName)
 
 	return nil
 }

@@ -253,32 +253,6 @@ func RefineUntilStable(db *gorm.DB) error {
 				break
 			}
 
-			/*errT := db.Transaction(func(tx *gorm.DB) error {
-				partitions, errC := GetNeedRefinePartitions(tx, table.PartitionTableName, level)
-				if errC != nil {
-					return fmt.Errorf("failed to get need refine partitions: %v", errC)
-				}
-				if len(partitions) == 0 {
-					if errEC := CleanupChildren(tx, table.PartitionTableName, "", level+1); errEC != nil {
-						return fmt.Errorf("failed to cleanup empty children: %v", errEC)
-					}
-					return nil
-				}
-				for _, p := range partitions {
-					if errP := CreateChildPartitions(tx, table.PartitionTableName, p); errP != nil { // 生成子分片
-						return fmt.Errorf("failed to create child partitions: %v", errP)
-					}
-					if errU := UpdatePartitionCount(tx, table.GeoTableNames, table.PartitionTableName, p.Geohash, level+1, table.Threshold); errU != nil {
-						return fmt.Errorf("failed to update partition count: %v", errU)
-					}
-					if errEC := CleanupChildren(tx, table.PartitionTableName, p.Geohash, level+1); errEC != nil {
-						return fmt.Errorf("failed to cleanup empty children: %v", errEC)
-					}
-				}
-
-				return nil
-			})*/
-
 			errT := RefinePartitions(db, table, level, 10)
 			if errT != nil {
 				return errT
