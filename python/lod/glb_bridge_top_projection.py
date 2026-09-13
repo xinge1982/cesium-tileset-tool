@@ -6,10 +6,12 @@ Run with Blender rather than ordinary Python:
     blender --background --python glb_bridge_top_projection.py -- input \
         --output output --resolution 512 --height-offset 0.15 \
         --segment-length 150 --tower-suffixes zt \
-        --top-exclude-suffixes xls --deck-height-suffixes qmb --overwrite
+        --top-exclude-suffixes xls --deck-height-suffixes qmb \
+        --skip-deck-projection --overwrite
 
-The script preserves each model's world-space horizontal orientation. It
-renders the bridge deck as a transparent orthographic top projection. Meshes
+The script preserves each model's world-space horizontal orientation. Unless
+--skip-deck-projection is used, it renders the bridge deck as a transparent
+orthographic top projection. Meshes
 whose object or mesh names match --tower-suffixes are excluded from that top
 view and rendered as front/back vertical cards. Meshes matching
 --top-exclude-suffixes are omitted entirely from the projection. Exported
@@ -53,6 +55,13 @@ class TowerBounds:
     maximum_v: float
     minimum_z: float
     maximum_z: float
+
+
+@dataclass
+class TowerCapture:
+    front: Path
+    back: Path
+    card_width: float
 
 
 def reset_scene() -> None:
@@ -258,7 +267,7 @@ def render_top_view(bounds: ProjectionBounds, destination: Path,
 
 def render_tower_views(bridge: ProjectionBounds, tower: TowerBounds,
                        directory: Path, index: int, resolution: int,
-                       background_strength: float) -> dict[str, Path]:
+                       background_strength: float) -> TowerCapture:
     captures: dict[str, Path] = {}
     center_u = (tower.minimum_u + tower.maximum_u) * 0.5
     center_v = (tower.minimum_v + tower.maximum_v) * 0.5
@@ -266,7 +275,14 @@ def render_tower_views(bridge: ProjectionBounds, tower: TowerBounds,
     width = max(tower.maximum_v - tower.minimum_v, 1e-4)
     height = max(tower.maximum_z - tower.minimum_z, 1e-4)
     depth = max(tower.maximum_u - tower.minimum_u, 1e-4)
-    scale = max(width, height) * 1.02
+    vertical_scale = height * 1.02
+    if width >= height:
+        resolution_x = resolution
+        resolution_y = max(32, round(resolution * height / width))
+    else:
+        resolution_x = max(32, round(resolution * width / height))
+        resolution_y = resolution
+    card_width = vertical_scale * resolution_x / resolution_y
     distance = max(width, height) * 2.5 + 10.0
     center = Vector((
         center_u * bridge.axis_u[0] + center_v * bridge.axis_v[0],
@@ -276,6 +292,8 @@ def render_tower_views(bridge: ProjectionBounds, tower: TowerBounds,
 
     for view_name, direction_sign in (("front", 1.0), ("back", -1.0)):
         camera, lights = setup_renderer(resolution, background_strength)
+        bpy.context.scene.render.resolution_x = resolution_x
+        bpy.context.scene.render.resolution_y = resolution_y
         direction = Vector((
             bridge.axis_u[0] * direction_sign,
             bridge.axis_u[1] * direction_sign,
@@ -287,7 +305,7 @@ def render_tower_views(bridge: ProjectionBounds, tower: TowerBounds,
         matrix = Matrix((right, up, back)).transposed().to_4x4()
         matrix.translation = center - direction * distance
         camera.matrix_world = matrix
-        camera.data.ortho_scale = scale
+        camera.data.ortho_scale = vertical_scale
         # Limit rendering to this tower's longitudinal slab. This matters when
         # several spatially separated towers belong to one source mesh.
         depth_padding = max(depth * 0.05, 0.1)
@@ -307,7 +325,11 @@ def render_tower_views(bridge: ProjectionBounds, tower: TowerBounds,
         bpy.context.scene.render.filepath = str(image_path)
         bpy.ops.render.render(write_still=True)
         captures[view_name] = image_path
-    return captures
+    return TowerCapture(
+        front=captures["front"],
+        back=captures["back"],
+        card_width=card_width,
+    )
 
 
 def build_projection_material(image_path: Path, alpha_cutoff: float,
@@ -399,11 +421,12 @@ def create_projection_mesh(bounds: ProjectionBounds, texture_scale: float,
 
 
 def create_tower_card(bridge: ProjectionBounds, tower: TowerBounds, index: int,
-                      front_material: object, back_material: object) -> object:
+                      front_material: object, back_material: object,
+                      card_width: float) -> object:
     center_u = (tower.minimum_u + tower.maximum_u) * 0.5
-    padding_v = max((tower.maximum_v - tower.minimum_v) * 0.01, 0.01)
-    minimum_v = tower.minimum_v - padding_v
-    maximum_v = tower.maximum_v + padding_v
+    center_v = (tower.minimum_v + tower.maximum_v) * 0.5
+    minimum_v = center_v - card_width * 0.5
+    maximum_v = center_v + card_width * 0.5
 
     # Front camera looks along +U, so its screen-right direction is -V.
     front_vertices = [
@@ -508,7 +531,8 @@ def convert(source: Path, destination: Path, resolution: int,
             alpha_cutoff: float, background_strength: float,
             tower_suffixes: tuple[str, ...], tower_cluster_gap: float,
             top_exclude_suffixes: tuple[str, ...],
-            deck_height_suffixes: tuple[str, ...]
+            deck_height_suffixes: tuple[str, ...],
+            skip_deck_projection: bool
             ) -> tuple[int, int]:
     reset_scene()
     meshes = import_meshes(source)
@@ -531,31 +555,37 @@ def convert(source: Path, destination: Path, resolution: int,
         raise ValueError(
             "tower/top-exclude suffixes matched every mesh; "
             "no bridge deck remains")
+    if skip_deck_projection and not tower_meshes:
+        raise ValueError(
+            "--skip-deck-projection requires at least one tower mesh")
 
     bounds = projection_bounds(world_vertices(deck_meshes))
-    height_meshes = [
-        obj for obj in deck_meshes
-        if mesh_name_has_suffix(obj, deck_height_suffixes)
-    ]
-    if not height_meshes:
-        height_meshes = deck_meshes
-    projection_height = max(
-        vertex[2] for vertex in world_vertices(height_meshes)
-    ) + height_offset
     towers = (tower_clusters(world_vertices(tower_meshes), bounds,
                               tower_cluster_gap)
               if tower_meshes else [])
     with tempfile.TemporaryDirectory(prefix="bridge_top_projection_") as temporary:
         temporary_path = Path(temporary)
-        for obj in [*tower_meshes, *top_excluded_meshes]:
-            obj.hide_render = True
-        image_path = temporary_path / "top.png"
-        texture_scale = render_top_view(
-            bounds, image_path, resolution, background_strength)
-        material = build_projection_material(
-            image_path, alpha_cutoff, "bridge_top_projection_unlit")
+        deck_projection: tuple[float, float, object] | None = None
+        if not skip_deck_projection:
+            for obj in [*tower_meshes, *top_excluded_meshes]:
+                obj.hide_render = True
+            image_path = temporary_path / "top.png"
+            texture_scale = render_top_view(
+                bounds, image_path, resolution, background_strength)
+            material = build_projection_material(
+                image_path, alpha_cutoff, "bridge_top_projection_unlit")
+            height_meshes = [
+                obj for obj in deck_meshes
+                if mesh_name_has_suffix(obj, deck_height_suffixes)
+            ]
+            if not height_meshes:
+                height_meshes = deck_meshes
+            projection_height = max(
+                vertex[2] for vertex in world_vertices(height_meshes)
+            ) + height_offset
+            deck_projection = (texture_scale, projection_height, material)
 
-        tower_materials: list[tuple[object, object]] = []
+        tower_materials: list[tuple[object, object, float]] = []
         if tower_meshes:
             for obj in deck_meshes:
                 obj.hide_render = True
@@ -568,25 +598,30 @@ def convert(source: Path, destination: Path, resolution: int,
                     bounds, tower, temporary_path, index, resolution,
                     background_strength)
                 front = build_projection_material(
-                    captures["front"], alpha_cutoff,
+                    captures.front, alpha_cutoff,
                     f"bridge_tower_{index:03d}_front_unlit")
                 back = build_projection_material(
-                    captures["back"], alpha_cutoff,
+                    captures.back, alpha_cutoff,
                     f"bridge_tower_{index:03d}_back_unlit")
-                tower_materials.append((front, back))
+                tower_materials.append(
+                    (front, back, captures.card_width))
 
         remove_source_meshes(meshes)
-        projection = create_projection_mesh(
-            bounds, texture_scale, segment_length, projection_height, material)
-        projections = [projection]
+        projections: list[object] = []
+        if deck_projection is not None:
+            projections.append(create_projection_mesh(
+                bounds, deck_projection[0], segment_length,
+                deck_projection[1], deck_projection[2]))
         for index, (tower, materials) in enumerate(zip(towers, tower_materials)):
             projections.append(create_tower_card(
-                bounds, tower, index, materials[0], materials[1]))
+                bounds, tower, index, materials[0], materials[1],
+                materials[2]))
         export_projection(destination, projections)
         patch_unlit_materials(destination, alpha_cutoff)
     total_length = bounds.maximum_u - bounds.minimum_u
-    segments = (1 if segment_length <= 0 else
-                max(1, math.ceil(total_length / segment_length)))
+    segments = (0 if skip_deck_projection else
+                (1 if segment_length <= 0 else
+                 max(1, math.ceil(total_length / segment_length))))
     return segments, len(towers)
 
 
@@ -619,6 +654,9 @@ def parse_args() -> argparse.Namespace:
         "--deck-height-suffixes", nargs="+", default=["qmb"],
         help="mesh/object name suffixes used to determine the common deck "
              "projection height (default: qmb)")
+    parser.add_argument(
+        "--skip-deck-projection", action="store_true",
+        help="omit the bridge deck texture and horizontal projection planes")
     return parser.parse_args(argv)
 
 
@@ -660,7 +698,7 @@ def main() -> int:
                 args.segment_length, args.alpha_cutoff,
                 args.background_strength, tower_suffixes,
                 args.tower_cluster_gap, top_exclude_suffixes,
-                deck_height_suffixes)
+                deck_height_suffixes, args.skip_deck_projection)
             succeeded += 1
             print(f"OK   {relative} -> {destination} "
                   f"[{segments} deck segment(s), {towers} tower card(s)]")
