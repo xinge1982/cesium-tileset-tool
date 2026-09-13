@@ -131,6 +131,15 @@ type TilesetLODConfig struct {
 	LOD3    TilesetLODLevelConfig
 }
 
+type DefaultView struct {
+	Lon     float64 `yaml:"Lng" json:"lng"`
+	Lat     float64 `yaml:"Lat" json:"lat"`
+	Height  float64 `yaml:"Height" json:"height"`
+	Heading float64 `yaml:"Heading" json:"heading"`
+	Pitch   float64 `yaml:"Pitch" json:"pitch"`
+	Roll    float64 `yaml:"Roll" json:"roll"`
+}
+
 type Config struct {
 	ManHttpsPort    string                   //服务端口
 	Name            string                   //配置名称

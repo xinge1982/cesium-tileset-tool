@@ -1,6 +1,14 @@
 Desc: sw_jiangsu_1031
 Bound: 120.9509,31.7113,121.0263,31.8967
 
+DefaultView:
+  Lon: 121.78256103,
+  Lat: 31.11249934,
+  Height: 180,
+  Heading: 339.544,
+  Pitch: -35,
+  Roll: 0,
+
 Postgres:
   Host: ${POSTGRES_HOST}
   Port: ${POSTGRES_PORT}
@@ -17,12 +25,12 @@ MinioOutput:
   Port: ${MINIO_OUTPUT_PORT}
   AccessKey: ${MINIO_OUTPUT_ACCKEY}
   SecretKey: ${MINIO_OUTPUT_SECKEY}
-  Bucket: jiangsu-1031
-  PicBucket: jiangsu-1031/images
+  Bucket: models
+  PicBucket: models/images
   BaseModelBucket: models/baseModels
-  PoleGltfBucket: jiangsu-1031/models/pole_gltf
+  PoleGltfBucket: models/pole_gltf
   GantryGltfBucket: models/baseModels
-  SignGltfBucket: jiangsu-1031/models/sign
+  SignGltfBucket: models/sign
   DeviceGltfBucket: models/baseModels
 
 LOD:
@@ -289,7 +297,7 @@ Tilesets:
               column: geom
 
   bridges:
-    name: 建筑
+    name: 桥梁
     url: /tilesets/bridges/tileset.json
     type: bridges
     enabled: true
