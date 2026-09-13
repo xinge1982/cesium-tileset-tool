@@ -107,6 +107,7 @@ const (
 	DeviceTileTableName string = "hdtraffic_ene"
 	PoleTileTableName   string = "hdpole"
 	GantryTileTableName string = "hdgantry"
+	BridgeTileTableName string = "hdtraffic_bridges"
 
 	MAX_GEOHASH_LEVEL int16 = 11
 	MIN_GEOHASH_LEVEL int16 = 3
