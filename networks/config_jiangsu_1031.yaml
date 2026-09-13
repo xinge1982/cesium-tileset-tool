@@ -2,12 +2,12 @@ Desc: sw_jiangsu_1031
 Bound: 120.9509,31.7113,121.0263,31.8967
 
 DefaultView:
-  lon: 121.14817955,
-  lat: 31.61714252,
-  height: 240.614,
-  heading: 58.429,
-  pitch: -28.958,
-  roll: 0.002,
+  lon: 121.14817955
+  lat: 31.61714252
+  height: 240.614
+  heading: 58.429
+  pitch: -28.958
+  roll: 0.002
 
 Postgres:
   Host: ${POSTGRES_HOST}

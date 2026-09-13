@@ -446,7 +446,16 @@ let viewer: Cesium.Viewer | null = null
 let mousePositionHandler: Cesium.ScreenSpaceEventHandler | null = null
 let tilesetManager: TilesetManager | null = null
 
-const defaultView = {
+interface CameraDefaultView {
+  lon: number
+  lat: number
+  height: number
+  heading: number
+  pitch: number
+  roll: number
+}
+
+const pageDefaultView: CameraDefaultView = {
   lon: 121.78256103,
   lat: 31.11249934,
   height: 180,
@@ -455,17 +464,54 @@ const defaultView = {
   roll: 0,
 }
 
+const defaultView = ref<CameraDefaultView>({ ...pageDefaultView })
+
+function parseDefaultView(value: unknown): CameraDefaultView | null {
+  if (!value || typeof value !== 'object') return null
+
+  const data = value as Record<string, unknown>
+  const view = {
+    lon: Number(data.lng),
+    lat: Number(data.lat),
+    height: Number(data.height),
+    heading: Number(data.heading),
+    pitch: Number(data.pitch),
+    roll: Number(data.roll),
+  }
+  if (!Object.values(view).every(Number.isFinite)) return null
+  if (view.lon < -180 || view.lon > 180 || view.lat < -90 || view.lat > 90) {
+    return null
+  }
+  if (view.height <= 0) return null
+  return view
+}
+
 function flyToDefaultView() {
   if (!viewer) return
+  const view = defaultView.value
   viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(defaultView.lon, defaultView.lat, defaultView.height),
+    destination: Cesium.Cartesian3.fromDegrees(view.lon, view.lat, view.height),
     orientation: {
-      heading: Cesium.Math.toRadians(defaultView.heading),
-      pitch: Cesium.Math.toRadians(defaultView.pitch),
-      roll: Cesium.Math.toRadians(defaultView.roll),
+      heading: Cesium.Math.toRadians(view.heading),
+      pitch: Cesium.Math.toRadians(view.pitch),
+      roll: Cesium.Math.toRadians(view.roll),
     },
     duration: 0.8,
   })
+}
+
+async function loadDefaultView() {
+  defaultView.value = { ...pageDefaultView }
+  try {
+    const response = await http.get('/default-view')
+    const configuredView = parseDefaultView(response.data?.data)
+    if (configuredView) {
+      defaultView.value = configuredView
+    }
+  } catch (error) {
+    console.warn('load default view failed, using page default:', error)
+  }
+  flyToDefaultView()
 }
 
 async function getTilesets() {
@@ -1009,7 +1055,7 @@ onMounted(() => {
   tilesetManager = new TilesetManager(viewer)
   tilesetManager.setLODDebugEnabled(lodDebugEnabled.value, updateVisibleLODContents)
   sceneStatus.value = '场景已初始化'
-  flyToDefaultView()
+  void loadDefaultView()
 
   getTilesets()
 })

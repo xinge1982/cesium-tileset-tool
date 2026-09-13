@@ -52,4 +52,14 @@ func (s *DataAccess) ApiRegister(g *gin.Engine, prefix string) {
 		searchService.GetTilesets,
 	)
 
+	r.GET(
+		"/default-view",
+		func(ctx *gin.Context) {
+			ctx.JSON(http.StatusOK, gin.H{
+				"code": http.StatusOK,
+				"data": config.Instance().DefaultView,
+			})
+		},
+	)
+
 }

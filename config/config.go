@@ -157,6 +157,7 @@ type Config struct {
 	CrossIds        map[string]string        //路口编号
 	Crossserver     CrossHttp                //服务配置
 	Bound           string                   //项目范围
+	DefaultView     *DefaultView             `yaml:"DefaultView" json:"defaultView,omitempty"` //默认视角
 	Tilesets        map[string]TilesetConfig //三维tileset
 	ImageTile       interface{}              //影像瓦片地址
 	LOD             TilesetLODConfig         //多级模型及切片参数
