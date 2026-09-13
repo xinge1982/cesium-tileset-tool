@@ -5,13 +5,15 @@ Run with Blender rather than ordinary Python:
 
     blender --background --python glb_bridge_top_projection.py -- input \
         --output output --resolution 512 --height-offset 0.15 \
-        --segment-length 150 --tower-suffixes zt --overwrite
+        --segment-length 150 --tower-suffixes zt \
+        --top-exclude-suffixes xls --overwrite
 
 The script preserves each model's world-space horizontal orientation. It
 renders the bridge deck as a transparent orthographic top projection. Meshes
 whose object or mesh names match --tower-suffixes are excluded from that top
-view and rendered as front/back vertical cards. Exported materials are patched
-to KHR_materials_unlit and alphaMode=MASK.
+view and rendered as front/back vertical cards. Meshes matching
+--top-exclude-suffixes are omitted entirely from the projection. Exported
+materials are patched to KHR_materials_unlit and alphaMode=MASK.
 """
 
 from __future__ import annotations
@@ -515,20 +517,30 @@ def patch_unlit_materials(path: Path, alpha_cutoff: float) -> None:
 def convert(source: Path, destination: Path, resolution: int,
             height_offset: float, segment_length: float,
             alpha_cutoff: float, background_strength: float,
-            tower_suffixes: tuple[str, ...], tower_cluster_gap: float
+            tower_suffixes: tuple[str, ...], tower_cluster_gap: float,
+            top_exclude_suffixes: tuple[str, ...]
             ) -> tuple[int, int]:
     reset_scene()
     meshes = import_meshes(source)
     tower_meshes = [obj for obj in meshes
                     if mesh_name_has_suffix(obj, tower_suffixes)]
-    deck_meshes = [obj for obj in meshes if obj not in tower_meshes]
+    top_excluded_meshes = [
+        obj for obj in meshes
+        if obj not in tower_meshes
+        and mesh_name_has_suffix(obj, top_exclude_suffixes)
+    ]
+    deck_meshes = [obj for obj in meshes
+                   if obj not in tower_meshes
+                   and obj not in top_excluded_meshes]
     if tower_suffixes and not tower_meshes:
         available = ", ".join(sorted(obj.name for obj in meshes))
         raise ValueError(
             f"no tower mesh matched suffixes {list(tower_suffixes)}; "
             f"available mesh objects: {available}")
     if not deck_meshes:
-        raise ValueError("tower suffixes matched every mesh; no bridge deck remains")
+        raise ValueError(
+            "tower/top-exclude suffixes matched every mesh; "
+            "no bridge deck remains")
 
     bounds = projection_bounds(world_vertices(deck_meshes))
     towers = (tower_clusters(world_vertices(tower_meshes), bounds,
@@ -536,7 +548,7 @@ def convert(source: Path, destination: Path, resolution: int,
               if tower_meshes else [])
     with tempfile.TemporaryDirectory(prefix="bridge_top_projection_") as temporary:
         temporary_path = Path(temporary)
-        for obj in tower_meshes:
+        for obj in [*tower_meshes, *top_excluded_meshes]:
             obj.hide_render = True
         image_path = temporary_path / "top.png"
         texture_scale = render_top_view(
@@ -547,6 +559,8 @@ def convert(source: Path, destination: Path, resolution: int,
         tower_materials: list[tuple[object, object]] = []
         if tower_meshes:
             for obj in deck_meshes:
+                obj.hide_render = True
+            for obj in top_excluded_meshes:
                 obj.hide_render = True
             for obj in tower_meshes:
                 obj.hide_render = False
@@ -598,6 +612,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tower-cluster-gap", type=float, default=0.0,
         help="gap used to split towers along the bridge; 0 selects automatically")
+    parser.add_argument(
+        "--top-exclude-suffixes", nargs="+", default=["xls"],
+        help="mesh/object name suffixes omitted from the top projection "
+             "(default: xls)")
     return parser.parse_args(argv)
 
 
@@ -616,6 +634,7 @@ def main() -> int:
         return 2
 
     tower_suffixes = normalized_suffixes(args.tower_suffixes)
+    top_exclude_suffixes = normalized_suffixes(args.top_exclude_suffixes)
 
     pattern = "**/*.glb" if args.recursive else "*.glb"
     sources = sorted(path for path in input_dir.glob(pattern) if path.is_file())
@@ -636,7 +655,7 @@ def main() -> int:
                 source, destination, args.resolution, args.height_offset,
                 args.segment_length, args.alpha_cutoff,
                 args.background_strength, tower_suffixes,
-                args.tower_cluster_gap)
+                args.tower_cluster_gap, top_exclude_suffixes)
             succeeded += 1
             print(f"OK   {relative} -> {destination} "
                   f"[{segments} deck segment(s), {towers} tower card(s)]")
