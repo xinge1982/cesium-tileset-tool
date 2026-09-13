@@ -278,6 +278,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
+import CesiumNavigation from 'cesium-navigation-es6'
 import http from './api/http'
 import {isNullOrEmpty} from './hooks/use-common'
 import {
@@ -445,6 +446,7 @@ const sourceCascaderProps = {
 let viewer: Cesium.Viewer | null = null
 let mousePositionHandler: Cesium.ScreenSpaceEventHandler | null = null
 let tilesetManager: TilesetManager | null = null
+let cesiumNavigator: (CesiumNavigation & { destroy?: () => void }) | null = null
 
 interface CameraDefaultView {
   lon: number
@@ -1047,6 +1049,16 @@ onMounted(() => {
 
   viewer.scene.globe.enableLighting = false
 
+  cesiumNavigator = new CesiumNavigation(viewer, {
+    enableCompass: true,
+    enableCompassOuterRing: true,
+    enableZoomControls: true,
+    enableDistanceLegend: false,
+    resetTooltip: '重置视角',
+    zoomInTooltip: '放大',
+    zoomOutTooltip: '缩小',
+  })
+
   mousePositionHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
   mousePositionHandler.setInputAction((movement: Cesium.ScreenSpaceEventHandler.MotionEvent) => {
     updateMouseCoordinates(pickPositionStable(movement.endPosition))
@@ -1143,6 +1155,8 @@ onBeforeUnmount(() => {
   mousePositionHandler?.destroy()
   tilesetManager?.destroy()
   tilesetManager = null
+  cesiumNavigator?.destroy?.()
+  cesiumNavigator = null
   viewer?.destroy()
 })
 </script>
