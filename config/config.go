@@ -132,12 +132,12 @@ type TilesetLODConfig struct {
 }
 
 type DefaultView struct {
-	Lon     float64 `yaml:"Lng" json:"lng"`
-	Lat     float64 `yaml:"Lat" json:"lat"`
-	Height  float64 `yaml:"Height" json:"height"`
-	Heading float64 `yaml:"Heading" json:"heading"`
-	Pitch   float64 `yaml:"Pitch" json:"pitch"`
-	Roll    float64 `yaml:"Roll" json:"roll"`
+	Lon     float64 `yaml:"lng" json:"lng"`
+	Lat     float64 `yaml:"lat" json:"lat"`
+	Height  float64 `yaml:"height" json:"height"`
+	Heading float64 `yaml:"heading" json:"heading"`
+	Pitch   float64 `yaml:"pitch" json:"pitch"`
+	Roll    float64 `yaml:"roll" json:"roll"`
 }
 
 type Config struct {
