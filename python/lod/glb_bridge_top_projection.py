@@ -6,14 +6,15 @@ Run with Blender rather than ordinary Python:
     blender --background --python glb_bridge_top_projection.py -- input \
         --output output --resolution 512 --height-offset 0.15 \
         --segment-length 150 --tower-suffixes zt \
-        --top-exclude-suffixes xls --overwrite
+        --top-exclude-suffixes xls --deck-height-suffixes qmb --overwrite
 
 The script preserves each model's world-space horizontal orientation. It
 renders the bridge deck as a transparent orthographic top projection. Meshes
 whose object or mesh names match --tower-suffixes are excluded from that top
 view and rendered as front/back vertical cards. Meshes matching
 --top-exclude-suffixes are omitted entirely from the projection. Exported
-materials are patched to KHR_materials_unlit and alphaMode=MASK.
+deck segments share one height derived from --deck-height-suffixes. Materials
+are patched to KHR_materials_unlit and alphaMode=MASK.
 """
 
 from __future__ import annotations
@@ -349,22 +350,8 @@ def world_point(axis_u: tuple[float, float], axis_v: tuple[float, float],
     )
 
 
-def segment_height(bounds: ProjectionBounds, start_u: float, end_u: float,
-                   height_offset: float) -> float:
-    epsilon = max((end_u - start_u) * 1e-6, 1e-8)
-    segment_vertices = [
-        vertex for vertex in bounds.vertices
-        if start_u - epsilon <= (
-            vertex[0] * bounds.axis_u[0] + vertex[1] * bounds.axis_u[1]
-        ) <= end_u + epsilon
-    ]
-    base = min((vertex[2] for vertex in segment_vertices),
-               default=bounds.minimum_z)
-    return base + height_offset
-
-
 def create_projection_mesh(bounds: ProjectionBounds, texture_scale: float,
-                           segment_length: float, height_offset: float,
+                           segment_length: float, projection_height: float,
                            material: object) -> object:
     total_length = bounds.maximum_u - bounds.minimum_u
     segment_count = (1 if segment_length <= 0 else
@@ -378,7 +365,6 @@ def create_projection_mesh(bounds: ProjectionBounds, texture_scale: float,
     for index in range(segment_count):
         start_u = bounds.minimum_u + total_length * index / segment_count
         end_u = bounds.minimum_u + total_length * (index + 1) / segment_count
-        height = segment_height(bounds, start_u, end_u, height_offset)
         corners_uv = (
             (start_u, bounds.minimum_v),
             (end_u, bounds.minimum_v),
@@ -386,8 +372,11 @@ def create_projection_mesh(bounds: ProjectionBounds, texture_scale: float,
             (start_u, bounds.maximum_v),
         )
         first = len(vertices)
-        vertices.extend(world_point(bounds.axis_u, bounds.axis_v, u, v, height)
-                        for u, v in corners_uv)
+        vertices.extend(
+            world_point(bounds.axis_u, bounds.axis_v, u, v,
+                        projection_height)
+            for u, v in corners_uv
+        )
         faces.append((first, first + 1, first + 2, first + 3))
         uvs.extend((
             0.5 + (u - center_u) / texture_scale,
@@ -518,7 +507,8 @@ def convert(source: Path, destination: Path, resolution: int,
             height_offset: float, segment_length: float,
             alpha_cutoff: float, background_strength: float,
             tower_suffixes: tuple[str, ...], tower_cluster_gap: float,
-            top_exclude_suffixes: tuple[str, ...]
+            top_exclude_suffixes: tuple[str, ...],
+            deck_height_suffixes: tuple[str, ...]
             ) -> tuple[int, int]:
     reset_scene()
     meshes = import_meshes(source)
@@ -543,6 +533,15 @@ def convert(source: Path, destination: Path, resolution: int,
             "no bridge deck remains")
 
     bounds = projection_bounds(world_vertices(deck_meshes))
+    height_meshes = [
+        obj for obj in deck_meshes
+        if mesh_name_has_suffix(obj, deck_height_suffixes)
+    ]
+    if not height_meshes:
+        height_meshes = deck_meshes
+    projection_height = max(
+        vertex[2] for vertex in world_vertices(height_meshes)
+    ) + height_offset
     towers = (tower_clusters(world_vertices(tower_meshes), bounds,
                               tower_cluster_gap)
               if tower_meshes else [])
@@ -578,7 +577,7 @@ def convert(source: Path, destination: Path, resolution: int,
 
         remove_source_meshes(meshes)
         projection = create_projection_mesh(
-            bounds, texture_scale, segment_length, height_offset, material)
+            bounds, texture_scale, segment_length, projection_height, material)
         projections = [projection]
         for index, (tower, materials) in enumerate(zip(towers, tower_materials)):
             projections.append(create_tower_card(
@@ -616,6 +615,10 @@ def parse_args() -> argparse.Namespace:
         "--top-exclude-suffixes", nargs="+", default=["xls"],
         help="mesh/object name suffixes omitted from the top projection "
              "(default: xls)")
+    parser.add_argument(
+        "--deck-height-suffixes", nargs="+", default=["qmb"],
+        help="mesh/object name suffixes used to determine the common deck "
+             "projection height (default: qmb)")
     return parser.parse_args(argv)
 
 
@@ -635,6 +638,7 @@ def main() -> int:
 
     tower_suffixes = normalized_suffixes(args.tower_suffixes)
     top_exclude_suffixes = normalized_suffixes(args.top_exclude_suffixes)
+    deck_height_suffixes = normalized_suffixes(args.deck_height_suffixes)
 
     pattern = "**/*.glb" if args.recursive else "*.glb"
     sources = sorted(path for path in input_dir.glob(pattern) if path.is_file())
@@ -655,7 +659,8 @@ def main() -> int:
                 source, destination, args.resolution, args.height_offset,
                 args.segment_length, args.alpha_cutoff,
                 args.background_strength, tower_suffixes,
-                args.tower_cluster_gap, top_exclude_suffixes)
+                args.tower_cluster_gap, top_exclude_suffixes,
+                deck_height_suffixes)
             succeeded += 1
             print(f"OK   {relative} -> {destination} "
                   f"[{segments} deck segment(s), {towers} tower card(s)]")
