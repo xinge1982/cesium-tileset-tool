@@ -2,9 +2,10 @@ package traffic_feature
 
 import (
 	"cesium-tileset-tool/config"
-	"cesium-tileset-tool/utils"
 	"context"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,43 @@ type TileSetPartition struct {
 type GeoCount struct {
 	Geohash string
 	Count   int
+}
+
+type projectBound struct {
+	MinLng float64
+	MinLat float64
+	MaxLng float64
+	MaxLat float64
+}
+
+func parseProjectBound(boundStr string) (projectBound, error) {
+	values := strings.Split(boundStr, ",")
+	if len(values) != 4 {
+		return projectBound{}, fmt.Errorf("项目范围Bound未正确配置，应为 west,south,east,north")
+	}
+	numbers := make([]float64, 4)
+	for i, value := range values {
+		number, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+			return projectBound{}, fmt.Errorf("项目范围Bound第%d项不是有效数字: %q", i+1, value)
+		}
+		numbers[i] = number
+	}
+	bound := projectBound{numbers[0], numbers[1], numbers[2], numbers[3]}
+	if bound.MinLng >= bound.MaxLng || bound.MinLat >= bound.MaxLat {
+		return projectBound{}, fmt.Errorf("项目范围Bound顺序无效，应为 west < east 且 south < north")
+	}
+	return bound, nil
+}
+
+func (bound projectBound) args() []interface{} {
+	return []interface{}{bound.MinLng, bound.MinLat, bound.MaxLng, bound.MaxLat}
+}
+
+func geohashIntersectsBound(hash string, bound projectBound) bool {
+	box := geohash.BoundingBox(hash)
+	return box.MaxLng >= bound.MinLng && box.MinLng <= bound.MaxLng &&
+		box.MaxLat >= bound.MinLat && box.MinLat <= bound.MaxLat
 }
 
 type GeoTable struct {
@@ -189,6 +227,10 @@ func unique(input []string) []string {
 }
 
 func InitTileSetTables(db *gorm.DB, boundStr string) error {
+	bound, err := parseProjectBound(boundStr)
+	if err != nil {
+		return err
+	}
 	for _, table := range AllTiles {
 		hasTable := db.Migrator().HasTable(table.PartitionTableName)
 		if !hasTable {
@@ -203,29 +245,26 @@ func InitTileSetTables(db *gorm.DB, boundStr string) error {
 			}
 		}
 
-		values := strings.Split(boundStr, ",")
-		if len(values) == 4 {
-			var minLng = utils.ToFloat64(values[0]) // 西经
-			var minLat = utils.ToFloat64(values[1]) // 南纬
-			var maxLng = utils.ToFloat64(values[2]) // 东经
-			var maxLat = utils.ToFloat64(values[3]) // 北纬
-			if errI := initTileSetPartitions(db, minLng, minLat, maxLng, maxLat, table.PartitionTableName, MinTileSetLevel); errI != nil {
-				return errI
-			}
-		} else {
-			return fmt.Errorf("项目范围Bound未正确配置，不能生成 %s 分片表", table.PartitionTableName)
+		if errI := initTileSetPartitions(db, bound.MinLng, bound.MinLat,
+			bound.MaxLng, bound.MaxLat, table.PartitionTableName, MinTileSetLevel); errI != nil {
+			return errI
 		}
 	}
 
 	return nil
 }
 
-func RemoveExpired(db *gorm.DB, expire time.Time) error {
+func RemoveExpired(db *gorm.DB, expire time.Time, boundStr string) error {
+	bound, err := parseProjectBound(boundStr)
+	if err != nil {
+		return err
+	}
 	for _, table := range AllTiles {
 		log.Infof("begin remove expired tileset table: %+v", table)
 
 		if err := db.Table(table.PartitionTableName).
-			Where("update_time < ?", expire).
+			Where("update_time < ? AND ST_Intersects(bbox, ST_MakeEnvelope(?, ?, ?, ?, 4326))",
+				append([]interface{}{expire}, bound.args()...)...).
 			Delete(&TileSetPartition{}).Error; err != nil {
 			return err
 		}
@@ -236,16 +275,20 @@ func RemoveExpired(db *gorm.DB, expire time.Time) error {
 	return nil
 }
 
-func RefineUntilStable(db *gorm.DB) error {
+func RefineUntilStable(db *gorm.DB, boundStr string) error {
+	bound, err := parseProjectBound(boundStr)
+	if err != nil {
+		return err
+	}
 	for _, table := range AllTiles {
 		log.Infof("begin refine tileset table: %+v", table)
 
-		minLevel, err := GetMinLevelPartition(db, table.PartitionTableName)
+		minLevel, err := GetMinLevelPartition(db, table.PartitionTableName, bound)
 		if err != nil {
 			return fmt.Errorf("failed to get min level: %v", err)
 		}
 		var level = minLevel
-		if errU := UpdatePartitionCount(db, table.GeoTableNames, table.PartitionTableName, "", level, table.Threshold); errU != nil {
+		if errU := UpdatePartitionCount(db, table.GeoTableNames, table.PartitionTableName, "", level, table.Threshold, bound); errU != nil {
 			return fmt.Errorf("failed to update partition count: %v", errU)
 		}
 		for {
@@ -253,7 +296,7 @@ func RefineUntilStable(db *gorm.DB) error {
 				break
 			}
 
-			errT := RefinePartitions(db, table, level, 10)
+			errT := RefinePartitions(db, table, level, 10, bound)
 			if errT != nil {
 				return errT
 			}
@@ -267,18 +310,18 @@ func RefineUntilStable(db *gorm.DB) error {
 	return nil
 }
 
-func RefinePartitions(db *gorm.DB, table GeoTable, level int16, workerCount int) error {
+func RefinePartitions(db *gorm.DB, table GeoTable, level int16, workerCount int, bound projectBound) error {
 	// Step 1: fetch partitions in a short transaction (or even without tx if safe)
 	var partitions []TileSetPartition
 	err := db.Transaction(func(tx *gorm.DB) error {
 		var err error
-		partitions, err = GetNeedRefinePartitions(tx, table.PartitionTableName, level)
+		partitions, err = GetNeedRefinePartitions(tx, table.PartitionTableName, level, bound)
 		if err != nil {
 			return fmt.Errorf("failed to get need refine partitions: %w", err)
 		}
 
 		if len(partitions) == 0 {
-			if errC := CleanupChildren(tx, table.PartitionTableName, "", level+1); errC != nil {
+			if errC := CleanupChildren(tx, table.PartitionTableName, "", level+1, bound); errC != nil {
 				return fmt.Errorf("failed to cleanup empty children: %w", errC)
 			}
 		}
@@ -299,15 +342,15 @@ func RefinePartitions(db *gorm.DB, table GeoTable, level int16, workerCount int)
 	for _, p := range partitions {
 		g.Go(func() error {
 			return db.Transaction(func(tx *gorm.DB) error {
-				if errC := CreateChildPartitions(tx, table.PartitionTableName, p); errC != nil {
+				if errC := CreateChildPartitions(tx, table.PartitionTableName, p, bound); errC != nil {
 					return fmt.Errorf("partition %s: create child partitions failed: %w", p.Geohash, errC)
 				}
 
-				if errC := UpdatePartitionCount(tx, table.GeoTableNames, table.PartitionTableName, p.Geohash, level+1, table.Threshold); errC != nil {
+				if errC := UpdatePartitionCount(tx, table.GeoTableNames, table.PartitionTableName, p.Geohash, level+1, table.Threshold, bound); errC != nil {
 					return fmt.Errorf("partition %s: update partition count failed: %w", p.Geohash, errC)
 				}
 
-				if errC := CleanupChildren(tx, table.PartitionTableName, p.Geohash, level+1); errC != nil {
+				if errC := CleanupChildren(tx, table.PartitionTableName, p.Geohash, level+1, bound); errC != nil {
 					return fmt.Errorf("partition %s: cleanup children failed: %w", p.Geohash, errC)
 				}
 
@@ -319,18 +362,21 @@ func RefinePartitions(db *gorm.DB, table GeoTable, level int16, workerCount int)
 	return g.Wait()
 }
 
-func CleanupChildren(db *gorm.DB, tableName string, parentHash string, level int16) error {
+func CleanupChildren(db *gorm.DB, tableName string, parentHash string, level int16, bound projectBound) error {
 	return db.Table(tableName).
 		Where(fmt.Sprintf("parent_hash like '%s%%' AND level >= ? AND need_refine = false",
-			parentHash), level).
+			parentHash)+" AND ST_Intersects(bbox, ST_MakeEnvelope(?, ?, ?, ?, 4326))",
+			append([]interface{}{level}, bound.args()...)...).
 		Delete(nil).Error
 }
 
 // GetNeedRefinePartitions 返回当前需要细分的分片
-func GetNeedRefinePartitions(db *gorm.DB, tableName string, level int16) ([]TileSetPartition, error) {
+func GetNeedRefinePartitions(db *gorm.DB, tableName string, level int16, bound projectBound) ([]TileSetPartition, error) {
 	var partitions []TileSetPartition
 
-	err := db.Table(tableName).Where("need_refine = ? AND level = ?", true, level).
+	err := db.Table(tableName).Where(
+		"need_refine = ? AND level = ? AND ST_Intersects(bbox, ST_MakeEnvelope(?, ?, ?, ?, 4326))",
+		append([]interface{}{true, level}, bound.args()...)...).
 		Find(&partitions).Error
 	if err != nil {
 		return nil, err
@@ -339,10 +385,11 @@ func GetNeedRefinePartitions(db *gorm.DB, tableName string, level int16) ([]Tile
 }
 
 // GetMinLevelPartition 获取 tileset_partition 表当前最小 level
-func GetMinLevelPartition(db *gorm.DB, tableName string) (int16, error) {
+func GetMinLevelPartition(db *gorm.DB, tableName string, bound projectBound) (int16, error) {
 	var minLevel int16
 	err := db.Table(tableName).
 		Select("MIN(level)").
+		Where("ST_Intersects(bbox, ST_MakeEnvelope(?, ?, ?, ?, 4326))", bound.args()...).
 		Scan(&minLevel).Error
 	if err != nil {
 		return 0, err
@@ -364,7 +411,7 @@ func GenerateChildGeohashes(parent string) []string {
 }
 
 // CreateChildPartitions 生成父分片的子分片
-func CreateChildPartitions(db *gorm.DB, tableName string, parent TileSetPartition) error {
+func CreateChildPartitions(db *gorm.DB, tableName string, parent TileSetPartition, bound projectBound) error {
 	parentLevel := parent.Level
 	childLevel := parentLevel + 1 // 下一层级
 
@@ -382,6 +429,9 @@ func CreateChildPartitions(db *gorm.DB, tableName string, parent TileSetPartitio
 
 	var children []TileSetPartition
 	for _, gh := range childGeohashes {
+		if !geohashIntersectsBound(gh, bound) {
+			continue
+		}
 		child := TileSetPartition{
 			Geohash:    gh,
 			Level:      childLevel,
@@ -414,7 +464,7 @@ func CreateChildPartitions(db *gorm.DB, tableName string, parent TileSetPartitio
 }
 
 // 检测是否需要分割
-func CheckShouldSplit(db *gorm.DB, geoTables []string, parentHash string, level int16, threshold int) bool {
+func CheckShouldSplit(db *gorm.DB, geoTables []string, parentHash string, level int16, threshold int, bound projectBound) bool {
 	// Step1: 聚合 表
 	// 合并统计结果
 	countMap := make(map[string]map[string]int)
@@ -426,9 +476,10 @@ func CheckShouldSplit(db *gorm.DB, geoTables []string, parentHash string, level 
 			SELECT ST_GeoHash(geom, ?) AS geohash,
 				   COUNT(*) AS count
 			FROM %s
-			WHERE ST_GeoHash(geom, ?) like '%s%%'
+			WHERE ST_GeoHash(geom, ?) LIKE ?
+			  AND ST_Intersects(ST_Transform(geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 			GROUP BY geohash
-		`, table, parentHash), level, level).Scan(&counts)
+		`, table), append([]interface{}{level, level, parentHash + "%"}, bound.args()...)...).Scan(&counts)
 		if result.Error != nil {
 			return false
 		}
@@ -478,7 +529,7 @@ func CheckShouldSplit(db *gorm.DB, geoTables []string, parentHash string, level 
 }
 
 // 更新分片函数
-func UpdatePartitionCount(db *gorm.DB, geoTables []string, tableName string, parentHash string, level int16, threshold int) error {
+func UpdatePartitionCount(db *gorm.DB, geoTables []string, tableName string, parentHash string, level int16, threshold int, bound projectBound) error {
 	// Step1: 聚合 表
 	// 合并统计结果
 	countMap := make(map[string]map[string]int)
@@ -489,9 +540,11 @@ func UpdatePartitionCount(db *gorm.DB, geoTables []string, tableName string, par
 			SELECT ST_GeoHash(geom, ?) AS geohash,
 				   COUNT(*) AS count
 			FROM %s
-			WHERE ST_GeoHash(geom, ?) like '%s%%' and (model like '%%glb' or model like '%%gltf')
+			WHERE ST_GeoHash(geom, ?) LIKE ?
+			  AND (model like '%%glb' or model like '%%gltf')
+			  AND ST_Intersects(ST_Transform(geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 			GROUP BY geohash
-		`, table, parentHash), level, level).Scan(&counts)
+		`, table), append([]interface{}{level, level, parentHash + "%"}, bound.args()...)...).Scan(&counts)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -505,7 +558,7 @@ func UpdatePartitionCount(db *gorm.DB, geoTables []string, tableName string, par
 	}
 
 	if level > MinTileSetLevel {
-		if !CheckShouldSplit(db, geoTables, parentHash, level, threshold) {
+		if !CheckShouldSplit(db, geoTables, parentHash, level, threshold, bound) {
 			if errC := setTableGeohashNotRefine(db, tableName, parentHash); errC != nil {
 				return errC
 			}

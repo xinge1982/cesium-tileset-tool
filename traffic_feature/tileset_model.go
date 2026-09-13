@@ -409,7 +409,11 @@ func UpdateTileByGeoHash(configName string, partitionTable string, tilesetsFolde
 		leafTiles = append(leafTiles, &leafTile)
 	}
 
-	changes, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable)
+	bound, errB := parseProjectBound(config.Instance().Bound)
+	if errB != nil {
+		return errB
+	}
+	changes, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable, bound)
 	if errG != nil {
 		return errG
 	}
@@ -455,9 +459,13 @@ func UpdateTileByGeoHash(configName string, partitionTable string, tilesetsFolde
 }
 
 // 生成分片数据
-func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFolder string) (*Tileset, error) {
+func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFolder string, boundStr string) (*Tileset, error) {
 	if configName == "" {
 		return nil, fmt.Errorf("configName is empty")
+	}
+	bound, errB := parseProjectBound(boundStr)
+	if errB != nil {
+		return nil, errB
 	}
 
 	if _, err := os.Stat(tilesetsFolder); os.IsNotExist(err) {
@@ -491,8 +499,9 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
             WHERE child.geohash LIKE parent.geohash || '%%'
               AND child.level = parent.level + 1
         )
-        AND parent.total_count > 0;
-    `, partitionTable, partitionTable)).Scan(&leafTiles).Error
+        AND parent.total_count > 0
+		AND ST_Intersects(parent.bbox, ST_MakeEnvelope(?, ?, ?, ?, 4326));
+    `, partitionTable, partitionTable), bound.args()...).Scan(&leafTiles).Error
 	if err != nil {
 		return nil, err
 	}
@@ -513,7 +522,7 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	lodLevels := configuredTileLODLevels(config.Instance())
 	geohashErrorBase := geohashGeometricErrorBase(lodLevels)
 	// 构建叶子节点
-	tilesByGeohash, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable)
+	tilesByGeohash, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable, bound)
 	if errG != nil {
 		return nil, errG
 	}
@@ -715,7 +724,7 @@ func refreshTileBoundWithGeometricError(node *TileNode, geohashErrorBase float64
 	}
 }
 
-func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHashTile, geoTable GeoTable, tilesetsFolder string, partitionTable string) (map[string]*TileNode, error) {
+func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHashTile, geoTable GeoTable, tilesetsFolder string, partitionTable string, bound projectBound) (map[string]*TileNode, error) {
 	tilesByGeohash := make(map[string]*TileNode)
 	workerCount := 8 // tune this based on CPU / DB capacity
 	cfg := config.Instance()
@@ -739,7 +748,7 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 			for j := range jobs {
 				t := j.t
 
-				models, err2 := queryGeoHashModelData(configName, geoTable, db, t.Geohash, "")
+				models, err2 := queryGeoHashModelData(configName, geoTable, db, t.Geohash, "", bound)
 				if err2 != nil {
 					results <- TileJobResult{err: err2}
 					continue
@@ -1106,7 +1115,7 @@ func buildTileByHashModels(models map[string][]*GeoHashModel, tile *GeoHashTile,
 	return fn, built, nil
 }
 
-func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHash string, dataTable string) (map[string][]*GeoHashModel, error) {
+func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHash string, dataTable string, bound projectBound) (map[string][]*GeoHashModel, error) {
 	var models = make(map[string][]*GeoHashModel)
 	for _, name := range tile.GeoTableNames {
 		if len(dataTable) > 0 && dataTable != name {
@@ -1114,7 +1123,7 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 		}
 		switch name {
 		case SignTileTableName:
-			vs, errQ := QuerySignsByGeohashBBox(configName, db, geoHash)
+			vs, errQ := QuerySignsByGeohashBBox(configName, db, geoHash, bound)
 			if errQ != nil {
 				return nil, errQ
 			}
@@ -1122,7 +1131,7 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		case DeviceTileTableName:
-			vs, errQ := QueryDevicesByGeohashBBox(configName, db, geoHash)
+			vs, errQ := QueryDevicesByGeohashBBox(configName, db, geoHash, bound)
 			if errQ != nil {
 				return nil, errQ
 			}
@@ -1130,7 +1139,7 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		case PoleTileTableName:
-			vs, errQ := QueryPolesByGeohashBBox(configName, db, geoHash)
+			vs, errQ := QueryPolesByGeohashBBox(configName, db, geoHash, bound)
 			if errQ != nil {
 				return nil, errQ
 			}
@@ -1138,7 +1147,7 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		case GantryTileTableName:
-			vs, errQ := QueryGantrysByGeohashBBox(configName, db, geoHash)
+			vs, errQ := QueryGantrysByGeohashBBox(configName, db, geoHash, bound)
 			if errQ != nil {
 				return nil, errQ
 			}
@@ -1239,7 +1248,11 @@ func UpdateGeoHashTileByDataLngLats(configName string, partitionTable string, ti
 			changedTiles = append(changedTiles, t)
 		}
 	}
-	changes, err := doTileJob(db, now, configName, changedTiles, geoTable, tilesetsFolder, partitionTable)
+	bound, errB := parseProjectBound(config.Instance().Bound)
+	if errB != nil {
+		return partitionNeedRefresh, errB
+	}
+	changes, err := doTileJob(db, now, configName, changedTiles, geoTable, tilesetsFolder, partitionTable, bound)
 	if err != nil {
 		return partitionNeedRefresh, err
 	}
@@ -1341,7 +1354,7 @@ func FindNodeByGeohash(root *TileNode, target string) *TileNode {
 }
 
 // 查询分片的所有模型数据
-func QueryDevicesByGeohashBBox(configName string, db *gorm.DB, geohash string) (map[string][]*GeoHashModel, error) {
+func QueryDevicesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound) (map[string][]*GeoHashModel, error) {
 	var devices []*GeoHashModel
 	err := db.Raw(fmt.Sprintf(`
 		SELECT dev.id, dev.chn_name as name, 'hdDevice' as type, dev.model, '%s' as table_name, 
@@ -1351,8 +1364,10 @@ func QueryDevicesByGeohashBBox(configName string, db *gorm.DB, geohash string) (
 		       dev.transform, dev.obj_angle, edit.metadata, edit.service_data
 		FROM %s dev
 		LEFT JOIN %s edit on edit.id::text = dev.id::text  and edit.device_table = '%s'
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf') 
-	`, DeviceTileTableName, DeviceTileTableName, DeviceEdit{}.TableName(), DeviceTileTableName), len(geohash), geohash).Scan(&devices).Error
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, DeviceTileTableName, DeviceTileTableName, DeviceEdit{}.TableName(), DeviceTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -1402,7 +1417,7 @@ func QueryGeohashByPoints(db *gorm.DB, lngLats [][]float64) ([]string, error) {
 }
 
 // 查询分片的所有模型数据
-func QuerySignsByGeohashBBox(configName string, db *gorm.DB, geohash string) (map[string][]*GeoHashModel, error) {
+func QuerySignsByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound) (map[string][]*GeoHashModel, error) {
 	var devices []*GeoHashModel
 	err := db.Raw(fmt.Sprintf(`
 		SELECT dev.id, dev.id::text as name, 'hdSign' as type, dev.model, '%s' as table_name,
@@ -1443,8 +1458,10 @@ func QuerySignsByGeohashBBox(configName string, db *gorm.DB, geohash string) (ma
 			SELECT ST_ClosestPoint(r.line_geom, dev.geom) AS proj_pt
 			WHERE r.line_geom IS NOT NULL
 		) cp ON TRUE
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf') 
-	`, SignTileTableName, SignTileTableName, SignEdit{}.TableName(), SignTileTableName), len(geohash), geohash).Scan(&devices).Error
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, SignTileTableName, SignTileTableName, SignEdit{}.TableName(), SignTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -1458,7 +1475,7 @@ func QuerySignsByGeohashBBox(configName string, db *gorm.DB, geohash string) (ma
 }
 
 // 查询分片的所有模型数据
-func QueryPolesByGeohashBBox(configName string, db *gorm.DB, geohash string) (map[string][]*GeoHashModel, error) {
+func QueryPolesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound) (map[string][]*GeoHashModel, error) {
 	var devices []*GeoHashModel
 	err := db.Raw(fmt.Sprintf(`
 		SELECT dev.pole_id as id, dev.id::text as name, 'hdPole' as type, dev.model, '%s' as table_name,
@@ -1468,8 +1485,10 @@ func QueryPolesByGeohashBBox(configName string, db *gorm.DB, geohash string) (ma
 		       dev.transform, dev.obj_angle, edit.service_data
 		FROM %s dev
 		LEFT JOIN %s edit on edit.id::text = dev.id::text and edit.pole_table = '%s'
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf') 
-	`, PoleTileTableName, PoleTileTableName, PoleEdit{}.TableName(), PoleTileTableName), len(geohash), geohash).Scan(&devices).Error
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, PoleTileTableName, PoleTileTableName, PoleEdit{}.TableName(), PoleTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -1483,7 +1502,7 @@ func QueryPolesByGeohashBBox(configName string, db *gorm.DB, geohash string) (ma
 }
 
 // 查询分片的所有模型数据
-func QueryGantrysByGeohashBBox(configName string, db *gorm.DB, geohash string) (map[string][]*GeoHashModel, error) {
+func QueryGantrysByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound) (map[string][]*GeoHashModel, error) {
 	var devices []*GeoHashModel
 	err := db.Raw(fmt.Sprintf(`
 		SELECT dev.id, dev.id::text as name, 'hdGantry' as type, dev.model, '%s' as table_name,
@@ -1493,8 +1512,10 @@ func QueryGantrysByGeohashBBox(configName string, db *gorm.DB, geohash string) (
 		       dev.transform, dev.obj_angle, edit.service_data
 		FROM %s dev
 		LEFT JOIN %s edit on edit.id::text = dev.id::text and edit.gantry_table = '%s'
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf') 
-	`, GantryTileTableName, GantryTileTableName, GantryEdit{}.TableName(), GantryTileTableName), len(geohash), geohash).Scan(&devices).Error
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, GantryTileTableName, GantryTileTableName, GantryEdit{}.TableName(), GantryTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}

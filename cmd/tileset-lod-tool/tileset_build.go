@@ -179,15 +179,17 @@ func (g *FeatureTileSetBuildCommand) Run() error {
 	}
 
 	// 初始化 tileset 分片数据
-	if errR := traffic_feature.RefineUntilStable(db); errR != nil {
+	if errR := traffic_feature.RefineUntilStable(db, cfg.Bound); errR != nil {
 		return errR
 	}
 
-	_, err := traffic_feature.GenerateAllGeoHashTile(configName, geoTable.PartitionTableName, g.outputPath)
+	_, err := traffic_feature.GenerateAllGeoHashTile(
+		configName, geoTable.PartitionTableName, g.outputPath, cfg.Bound)
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = traffic_feature.RemoveExpired(db, time.Now().Add(-1*time.Hour))
+	err = traffic_feature.RemoveExpired(
+		db, time.Now().Add(-1*time.Hour), cfg.Bound)
 	if err != nil {
 		log.Fatal(err)
 	}
