@@ -8,7 +8,13 @@ packages are required.
 Example:
 
     python extract_tileset_textures.py /data/features \
-        --output /data/features_textures --overwrite
+        --output /data/features_textures \
+        --feature-id-prefix hdroad_side_facility. --overwrite
+
+When --feature-id-prefix is set, B3DM images are traced through matching batch
+IDs, primitive materials, textures, and images. For I3DM, a matching instance
+exports the shared model's textures. Standalone GLTF/GLB files without feature
+metadata are skipped while filtering.
 """
 
 from __future__ import annotations
@@ -37,6 +43,14 @@ MIME_EXTENSIONS = {
     "image/gif": ".gif",
     "image/bmp": ".bmp",
 }
+ACCESSOR_COMPONENTS = {
+    5120: ("b", 1),
+    5121: ("B", 1),
+    5122: ("h", 2),
+    5123: ("H", 2),
+    5125: ("I", 4),
+    5126: ("f", 4),
+}
 
 
 @dataclass
@@ -54,6 +68,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("input_dir", type=Path)
     parser.add_argument("--output", "-o", type=Path, required=True)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--feature-id-prefix",
+        help="only export textures used by features whose ID starts with this value",
+    )
+    parser.add_argument(
+        "--feature-id-field",
+        default="id",
+        help="Batch Table feature ID property (default: id)",
+    )
     parser.add_argument(
         "--manifest-name",
         default="textures_manifest.json",
@@ -119,6 +142,25 @@ def i3dm_payload(data: bytes) -> tuple[int, bytes]:
         raise ValueError("invalid I3DM header")
     offset = 32 + ftj + ftb + btj + btb
     return gltf_format, data[offset:byte_length]
+
+
+def batch_table(
+    data: bytes, magic: bytes
+) -> tuple[dict[str, Any], dict[str, Any], bytes]:
+    if magic == b"b3dm":
+        header_size = 28
+        _, _, ftj, ftb, btj, btb = struct.unpack_from("<6I", data, 4)
+    elif magic == b"i3dm":
+        header_size = 32
+        _, _, ftj, ftb, btj, btb, _ = struct.unpack_from("<7I", data, 4)
+    else:
+        raise ValueError(f"unsupported batch table container: {magic!r}")
+    offset = header_size
+    feature_json = padded_json(data[offset:offset + ftj])
+    offset += ftj + ftb
+    batch_json = padded_json(data[offset:offset + btj])
+    offset += btj
+    return feature_json, batch_json, data[offset:offset + btb]
 
 
 def cmpt_payloads(data: bytes) -> list[tuple[str, bytes]]:
@@ -189,15 +231,25 @@ def safe_source_name(source_key: str) -> str:
 
 
 class TextureExtractor:
-    def __init__(self, root: Path, output: Path, overwrite: bool) -> None:
+    def __init__(
+        self,
+        root: Path,
+        output: Path,
+        overwrite: bool,
+        feature_id_prefix: str | None,
+        feature_id_field: str,
+    ) -> None:
         self.root = root
         self.output = output
         self.overwrite = overwrite
+        self.feature_id_prefix = feature_id_prefix
+        self.feature_id_field = feature_id_field
         self.visited_files: set[Path] = set()
         self.visited_virtual: set[str] = set()
         self.hash_outputs: dict[str, str] = {}
         self.records: list[dict[str, Any]] = []
         self.failures: list[dict[str, str]] = []
+        self.matched_feature_count = 0
 
     def source_key(self, path: Path) -> str:
         try:
@@ -227,6 +279,120 @@ class TextureExtractor:
             raise ValueError(f"binary GLB buffer {buffer_index} is missing")
         return gltf.binary_chunks[embedded_index]
 
+    def accessor_values(self, gltf: GltfDocument, accessor_index: int) -> list[int]:
+        accessors = gltf.document.get("accessors", [])
+        views = gltf.document.get("bufferViews", [])
+        if accessor_index >= len(accessors):
+            raise ValueError(f"accessor index {accessor_index} is out of range")
+        accessor = accessors[accessor_index]
+        if accessor.get("type") != "SCALAR" or "sparse" in accessor:
+            raise ValueError("feature ID accessor must be a non-sparse SCALAR")
+        component_type = int(accessor["componentType"])
+        if component_type not in ACCESSOR_COMPONENTS:
+            raise ValueError(f"unsupported feature ID component type {component_type}")
+        code, component_size = ACCESSOR_COMPONENTS[component_type]
+        view = views[int(accessor["bufferView"])]
+        buffer = self.read_buffer(gltf, int(view.get("buffer", 0)))
+        offset = int(view.get("byteOffset", 0)) + int(accessor.get("byteOffset", 0))
+        stride = int(view.get("byteStride", component_size))
+        count = int(accessor["count"])
+        return [
+            int(struct.unpack_from("<" + code, buffer, offset + i * stride)[0])
+            for i in range(count)
+        ]
+
+    def matching_batch_indices(self, data: bytes, magic: bytes) -> set[int]:
+        if self.feature_id_prefix is None:
+            return set()
+        feature_json, batch_json, _ = batch_table(data, magic)
+        values = batch_json.get(self.feature_id_field)
+        if not isinstance(values, list):
+            raise ValueError(
+                f"Batch Table property {self.feature_id_field!r} is not an array"
+            )
+        expected = int(feature_json.get(
+            "BATCH_LENGTH" if magic == b"b3dm" else "INSTANCES_LENGTH",
+            len(values),
+        ))
+        if len(values) < expected:
+            raise ValueError(
+                f"Batch Table property {self.feature_id_field!r} has "
+                f"{len(values)} values, expected {expected}"
+            )
+        matches = {
+            index for index, value in enumerate(values[:expected])
+            if str(value).startswith(self.feature_id_prefix)
+        }
+        self.matched_feature_count += len(matches)
+        return matches
+
+    @staticmethod
+    def material_texture_indices(value: Any) -> set[int]:
+        result: set[int] = set()
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key.lower().endswith("texture") and isinstance(child, dict):
+                    index = child.get("index")
+                    if isinstance(index, int):
+                        result.add(index)
+                result.update(TextureExtractor.material_texture_indices(child))
+        elif isinstance(value, list):
+            for child in value:
+                result.update(TextureExtractor.material_texture_indices(child))
+        return result
+
+    def b3dm_image_indices(
+        self, data: bytes, gltf: GltfDocument
+    ) -> set[int] | None:
+        if self.feature_id_prefix is None:
+            return None
+        matching_batches = self.matching_batch_indices(data, b"b3dm")
+        if not matching_batches:
+            return set()
+        material_indices: set[int] = set()
+        for mesh in gltf.document.get("meshes", []):
+            for primitive in mesh.get("primitives", []):
+                attributes = primitive.get("attributes", {})
+                accessor_index = next(
+                    (attributes[name] for name in (
+                        "_BATCHID", "BATCHID", "_FEATURE_ID_0", "FEATURE_ID_0"
+                    ) if name in attributes),
+                    None,
+                )
+                if accessor_index is None:
+                    continue
+                values = self.accessor_values(gltf, int(accessor_index))
+                if matching_batches.intersection(values):
+                    material = primitive.get("material")
+                    if isinstance(material, int):
+                        material_indices.add(material)
+
+        texture_indices: set[int] = set()
+        materials = gltf.document.get("materials", [])
+        for material_index in material_indices:
+            if material_index < len(materials):
+                texture_indices.update(
+                    self.material_texture_indices(materials[material_index])
+                )
+
+        image_indices: set[int] = set()
+        textures = gltf.document.get("textures", [])
+        for texture_index in texture_indices:
+            if texture_index >= len(textures):
+                continue
+            texture = textures[texture_index]
+            source = texture.get("source")
+            if isinstance(source, int):
+                image_indices.add(source)
+            basisu_source = (
+                texture.get("extensions", {})
+                .get("KHR_texture_basisu", {})
+                .get("source")
+            )
+            if isinstance(basisu_source, int):
+                image_indices.add(basisu_source)
+        return image_indices
+
     def image_bytes(
         self, gltf: GltfDocument, image: dict[str, Any]
     ) -> tuple[bytes, str | None, str | None]:
@@ -250,11 +416,15 @@ class TextureExtractor:
             raise ValueError("image bufferView exceeds its buffer")
         return buffer[start:end], mime_type, None
 
-    def extract_gltf(self, gltf: GltfDocument) -> None:
+    def extract_gltf(
+        self, gltf: GltfDocument, allowed_images: set[int] | None = None
+    ) -> None:
         if gltf.source_key in self.visited_virtual:
             return
         self.visited_virtual.add(gltf.source_key)
         for index, image in enumerate(gltf.document.get("images", [])):
+            if allowed_images is not None and index not in allowed_images:
+                continue
             try:
                 data, mime_type, uri = self.image_bytes(gltf, image)
                 extension = image_extension(mime_type, uri, data)
@@ -289,6 +459,10 @@ class TextureExtractor:
                 self.warn(f"{gltf.source_key} image[{index}]", exc)
 
     def process_i3dm(self, data: bytes, path: Path, source_key: str) -> None:
+        if self.feature_id_prefix is not None:
+            matches = self.matching_batch_indices(data, b"i3dm")
+            if not matches:
+                return
         gltf_format, payload = i3dm_payload(data)
         if gltf_format == 1:
             self.extract_gltf(parse_glb(payload, source_key + "#i3dm", path.parent))
@@ -297,14 +471,18 @@ class TextureExtractor:
         if uri.startswith("data:"):
             self.warn(source_key, "I3DM data URI model is not supported")
             return
-        self.process_file((path.parent / unquote_to_bytes(uri).decode("utf-8")).resolve())
+        self.process_file(
+            (path.parent / unquote_to_bytes(uri).decode("utf-8")).resolve(),
+            include_unbatched=True,
+        )
 
     def process_binary(self, data: bytes, path: Path, source_key: str) -> None:
         magic = data[:4]
         if magic == b"glTF":
             self.extract_gltf(parse_glb(data, source_key, path.parent))
         elif magic == b"b3dm":
-            self.extract_gltf(parse_b3dm(data, source_key, path.parent))
+            gltf = parse_b3dm(data, source_key, path.parent)
+            self.extract_gltf(gltf, self.b3dm_image_indices(data, gltf))
         elif magic == b"i3dm":
             self.process_i3dm(data, path, source_key)
         elif magic == b"cmpt":
@@ -315,8 +493,14 @@ class TextureExtractor:
                 except Exception as exc:
                     self.warn(inner_key, exc)
 
-    def process_file(self, path: Path) -> None:
+    def process_file(self, path: Path, include_unbatched: bool = False) -> None:
         path = path.resolve()
+        if (
+            self.feature_id_prefix is not None
+            and path.suffix.lower() in (".gltf", ".glb")
+            and not include_unbatched
+        ):
+            return
         if path in self.visited_files:
             return
         self.visited_files.add(path)
@@ -347,12 +531,21 @@ def main() -> int:
         print(f"error: input directory does not exist: {root}", file=sys.stderr)
         return 2
     output.mkdir(parents=True, exist_ok=True)
-    extractor = TextureExtractor(root, output, args.overwrite)
+    extractor = TextureExtractor(
+        root,
+        output,
+        args.overwrite,
+        args.feature_id_prefix,
+        args.feature_id_field,
+    )
     extractor.run()
     manifest = {
         "input": str(root),
         "textureCount": len(extractor.records),
         "uniqueTextureCount": len(extractor.hash_outputs),
+        "featureIdPrefix": args.feature_id_prefix,
+        "featureIdField": args.feature_id_field,
+        "matchedFeatureCount": extractor.matched_feature_count,
         "failureCount": len(extractor.failures),
         "textures": extractor.records,
         "failures": extractor.failures,
