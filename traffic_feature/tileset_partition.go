@@ -78,6 +78,7 @@ type GeoTable struct {
 	GeoTableNames      []string
 	Threshold          int
 	TilesetSources     map[string]config.TilesetSourceConfig
+	LOD                config.TilesetLODConfig
 }
 
 const (

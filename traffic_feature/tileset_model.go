@@ -165,23 +165,20 @@ func tileModelRelativePath(geohash string, lod int) string {
 	return path.Join(parts...)
 }
 
-func configuredTileLODLevels(cfg *config.Config) []tileLODLevel {
-	if cfg == nil {
-		return []tileLODLevel{{Level: 3, GeometricError: 0}}
-	}
-	if !cfg.LOD.Enabled {
+func configuredTileLODLevels(lod config.TilesetLODConfig) []tileLODLevel {
+	if !lod.Enabled {
 		return []tileLODLevel{{
 			Level:          3,
-			ModelFolder:    cfg.LOD.LOD3.ModelFolder,
-			GeometricError: cfg.LOD.LOD3.GeometricError,
+			ModelFolder:    lod.LOD3.ModelFolder,
+			GeometricError: lod.LOD3.GeometricError,
 		}}
 	}
 
 	return []tileLODLevel{
-		{Level: 0, ModelFolder: cfg.LOD.LOD0.ModelFolder, GeometricError: cfg.LOD.LOD0.GeometricError},
-		{Level: 1, ModelFolder: cfg.LOD.LOD1.ModelFolder, GeometricError: cfg.LOD.LOD1.GeometricError},
-		{Level: 2, ModelFolder: cfg.LOD.LOD2.ModelFolder, GeometricError: cfg.LOD.LOD2.GeometricError},
-		{Level: 3, ModelFolder: cfg.LOD.LOD3.ModelFolder, GeometricError: cfg.LOD.LOD3.GeometricError},
+		{Level: 0, ModelFolder: lod.LOD0.ModelFolder, GeometricError: lod.LOD0.GeometricError},
+		{Level: 1, ModelFolder: lod.LOD1.ModelFolder, GeometricError: lod.LOD1.GeometricError},
+		{Level: 2, ModelFolder: lod.LOD2.ModelFolder, GeometricError: lod.LOD2.GeometricError},
+		{Level: 3, ModelFolder: lod.LOD3.ModelFolder, GeometricError: lod.LOD3.GeometricError},
 	}
 }
 
@@ -224,7 +221,7 @@ func localLODModelRoot(cfg *config.Config, level tileLODLevel) (string, error) {
 	return modelRoot, nil
 }
 
-func ensureLocalLODModelDirectories(cfg *config.Config, levels []tileLODLevel) error {
+func ensureLocalLODModelDirectories(cfg *config.Config, lod config.TilesetLODConfig, levels []tileLODLevel) error {
 	previousError := math.Inf(1)
 	for _, level := range levels {
 		if level.GeometricError < 0 {
@@ -238,7 +235,7 @@ func ensureLocalLODModelDirectories(cfg *config.Config, levels []tileLODLevel) e
 			if level.GeometricError != 0 {
 				return fmt.Errorf("LOD3 geometricError must be 0")
 			}
-			if !cfg.LOD.LOD3.LocalFirst {
+			if !lod.LOD3.LocalFirst {
 				continue
 			}
 		}
@@ -519,7 +516,7 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 
 	// 收集geohash
 	now := time.Now()
-	lodLevels := configuredTileLODLevels(config.Instance())
+	lodLevels := configuredTileLODLevels(geoTable.LOD)
 	geohashErrorBase := geohashGeometricErrorBase(lodLevels)
 	// 构建叶子节点
 	tilesByGeohash, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable, bound)
@@ -728,8 +725,8 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 	tilesByGeohash := make(map[string]*TileNode)
 	workerCount := 8 // tune this based on CPU / DB capacity
 	cfg := config.Instance()
-	lodLevels := configuredTileLODLevels(cfg)
-	if err := ensureLocalLODModelDirectories(cfg, lodLevels); err != nil {
+	lodLevels := configuredTileLODLevels(geoTable.LOD)
+	if err := ensureLocalLODModelDirectories(cfg, geoTable.LOD, lodLevels); err != nil {
 		return nil, err
 	}
 	localModelCache := &localLODModelCache{models: make(map[string]*GltfModel)}
@@ -1123,7 +1120,7 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 		}
 		switch name {
 		case SignTileTableName:
-			vs, errQ := QuerySignsByGeohashBBox(configName, db, geoHash, bound)
+			vs, errQ := QuerySignsByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
 			if errQ != nil {
 				return nil, errQ
 			}
@@ -1131,7 +1128,7 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		case QbbTileTableName:
-			vs, errQ := QueryQbbsByGeohashBBox(configName, db, geoHash, bound)
+			vs, errQ := QueryQbbsByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
 			if errQ != nil {
 				return nil, errQ
 			}
@@ -1139,7 +1136,7 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		case DeviceTileTableName:
-			vs, errQ := QueryDevicesByGeohashBBox(configName, db, geoHash, bound)
+			vs, errQ := QueryDevicesByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
 			if errQ != nil {
 				return nil, errQ
 			}
@@ -1147,7 +1144,7 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		case PoleTileTableName:
-			vs, errQ := QueryPolesByGeohashBBox(configName, db, geoHash, bound)
+			vs, errQ := QueryPolesByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
 			if errQ != nil {
 				return nil, errQ
 			}
@@ -1155,7 +1152,7 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		case GantryTileTableName:
-			vs, errQ := QueryGantrysByGeohashBBox(configName, db, geoHash, bound)
+			vs, errQ := QueryGantrysByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
 			if errQ != nil {
 				return nil, errQ
 			}
@@ -1163,7 +1160,7 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
 		case BridgeTileTableName:
-			vs, errQ := QueryBridgesByGeohashBBox(configName, db, geoHash, bound)
+			vs, errQ := QueryBridgesByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
 			if errQ != nil {
 				return nil, errQ
 			}
@@ -1370,7 +1367,7 @@ func FindNodeByGeohash(root *TileNode, target string) *TileNode {
 }
 
 // 查询分片的所有模型数据
-func QueryQbbsByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound) (map[string][]*GeoHashModel, error) {
+func QueryQbbsByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
 	var qbbs []*GeoHashModel
 	err := db.Raw(fmt.Sprintf(`
 		SELECT dev.id, dev.chn_name as name, 'hdQbb' as type, dev.model, '%s' as table_name, 
@@ -1387,7 +1384,7 @@ func QueryQbbsByGeohashBBox(configName string, db *gorm.DB, geohash string, boun
 		return nil, err
 	}
 
-	models, err2 := getModelContentFromMinio(db, configName, qbbs)
+	models, err2 := getModelContentFromMinio(db, configName, qbbs, lod)
 	if err2 != nil {
 		return nil, err2
 	}
@@ -1396,7 +1393,7 @@ func QueryQbbsByGeohashBBox(configName string, db *gorm.DB, geohash string, boun
 }
 
 // 查询分片的所有模型数据
-func QueryDevicesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound) (map[string][]*GeoHashModel, error) {
+func QueryDevicesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
 	var devices []*GeoHashModel
 	err := db.Raw(fmt.Sprintf(`
 		SELECT dev.id, dev.chn_name as name, 'hdDevice' as type, dev.model, '%s' as table_name, 
@@ -1414,7 +1411,7 @@ func QueryDevicesByGeohashBBox(configName string, db *gorm.DB, geohash string, b
 		return nil, err
 	}
 
-	models, err2 := getModelContentFromMinio(db, configName, devices)
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
 	if err2 != nil {
 		return nil, err2
 	}
@@ -1459,7 +1456,7 @@ func QueryGeohashByPoints(db *gorm.DB, lngLats [][]float64) ([]string, error) {
 }
 
 // 查询分片的所有模型数据
-func QuerySignsByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound) (map[string][]*GeoHashModel, error) {
+func QuerySignsByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
 	var devices []*GeoHashModel
 	err := db.Raw(fmt.Sprintf(`
 		SELECT dev.id, dev.id::text as name, 'hdSign' as type, dev.model, '%s' as table_name,
@@ -1508,7 +1505,7 @@ func QuerySignsByGeohashBBox(configName string, db *gorm.DB, geohash string, bou
 		return nil, err
 	}
 
-	models, err2 := getModelContentFromMinio(db, configName, devices)
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
 	if err2 != nil {
 		return nil, err2
 	}
@@ -1517,7 +1514,7 @@ func QuerySignsByGeohashBBox(configName string, db *gorm.DB, geohash string, bou
 }
 
 // 查询分片的所有模型数据
-func QueryPolesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound) (map[string][]*GeoHashModel, error) {
+func QueryPolesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
 	var devices []*GeoHashModel
 	err := db.Raw(fmt.Sprintf(`
 		SELECT dev.pole_id as id, dev.id::text as name, 'hdPole' as type, dev.model, '%s' as table_name,
@@ -1535,7 +1532,7 @@ func QueryPolesByGeohashBBox(configName string, db *gorm.DB, geohash string, bou
 		return nil, err
 	}
 
-	models, err2 := getModelContentFromMinio(db, configName, devices)
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
 	if err2 != nil {
 		return nil, err2
 	}
@@ -1544,7 +1541,7 @@ func QueryPolesByGeohashBBox(configName string, db *gorm.DB, geohash string, bou
 }
 
 // 查询分片的所有模型数据
-func QueryGantrysByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound) (map[string][]*GeoHashModel, error) {
+func QueryGantrysByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
 	var devices []*GeoHashModel
 	err := db.Raw(fmt.Sprintf(`
 		SELECT dev.id, dev.id::text as name, 'hdGantry' as type, dev.model, '%s' as table_name,
@@ -1562,7 +1559,7 @@ func QueryGantrysByGeohashBBox(configName string, db *gorm.DB, geohash string, b
 		return nil, err
 	}
 
-	models, err2 := getModelContentFromMinio(db, configName, devices)
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
 	if err2 != nil {
 		return nil, err2
 	}
@@ -1571,7 +1568,7 @@ func QueryGantrysByGeohashBBox(configName string, db *gorm.DB, geohash string, b
 }
 
 // 查询分片的所有模型数据
-func QueryBridgesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound) (map[string][]*GeoHashModel, error) {
+func QueryBridgesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
 	var devices []*GeoHashModel
 	err := db.Raw(fmt.Sprintf(`
 		SELECT dev.id, dev.id::text as name, 'hdBridge' as type, dev.model, '%s' as table_name,
@@ -1588,7 +1585,7 @@ func QueryBridgesByGeohashBBox(configName string, db *gorm.DB, geohash string, b
 		return nil, err
 	}
 
-	models, err2 := getModelContentFromMinio(db, configName, devices)
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
 	if err2 != nil {
 		return nil, err2
 	}
@@ -1602,19 +1599,19 @@ type MinioBucket struct {
 	prefix     string
 }
 
-func getModelContentFromMinio(db *gorm.DB, cfgName string, devices []*GeoHashModel) (
+func getModelContentFromMinio(db *gorm.DB, cfgName string, devices []*GeoHashModel, lod config.TilesetLODConfig) (
 	map[string][]*GeoHashModel, error) {
 	models := make(map[string][]*GeoHashModel)
 	code := config.EncodeContext(cfgName, "")
 	cfg := config.Instance()
-	localFirst := cfg != nil && cfg.LOD.LOD3.LocalFirst
-	minioFallback := cfg == nil || cfg.LOD.LOD3.MinioFallback
+	localFirst := cfg != nil && lod.LOD3.LocalFirst
+	minioFallback := cfg == nil || lod.LOD3.MinioFallback
 	var localRoot string
 	var err error
 	if localFirst {
 		localRoot, err = localLODModelRoot(cfg, tileLODLevel{
 			Level:       3,
-			ModelFolder: cfg.LOD.LOD3.ModelFolder,
+			ModelFolder: lod.LOD3.ModelFolder,
 		})
 		if err != nil {
 			return nil, err

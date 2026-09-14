@@ -33,28 +33,21 @@ MinioOutput:
   SignGltfBucket: models/sign
   DeviceGltfBucket: models/baseModels
 
-LOD:
-  Enabled: true
-  LOD0:
-    ModelFolder: lod0
-    GeometricError: 4.0
-  LOD1:
-    ModelFolder: lod1
-    GeometricError: 1.2
-  LOD2:
-    ModelFolder: lod2
-    GeometricError: 0.6
-  LOD3:
-    ModelFolder: lod3
-    GeometricError: 0
-    LocalFirst: true
-    MinioFallback: true
-
 Tilesets:
   features:
     name: 设备设施
     url: /tilesets/features/tileset.json
     type: features
+    lod:
+      enabled: true
+      lod0: { modelFolder: lod0, geometricError: 4.0 }
+      lod1: { modelFolder: lod1, geometricError: 1.2 }
+      lod2: { modelFolder: lod2, geometricError: 0.6 }
+      lod3:
+        modelFolder: lod3
+        geometricError: 0
+        localFirst: true
+        minioFallback: true
     enabled: true
     maintainable: true
     order: 1
@@ -345,6 +338,16 @@ Tilesets:
     name: 桥梁
     url: /tilesets/bridges/tileset.json
     type: bridges
+    lod:
+      enabled: true
+      lod0: { modelFolder: lod0, geometricError: 4.0 }
+      lod1: { modelFolder: lod1, geometricError: 1.2 }
+      lod2: { modelFolder: lod2, geometricError: 0.6 }
+      lod3:
+        modelFolder: lod3
+        geometricError: 0
+        localFirst: true
+        minioFallback: true
     enabled: true
     maintainable: true
     order: 3
@@ -403,6 +406,16 @@ Tilesets:
     name: 道路面
     url: https://tileset.amap3d.online:48611/share/jiangsu/%E6%B1%9F%E8%8B%8F02/roadsurface/tileset.json
     type: road_surface
+    lod:
+      enabled: true
+      lod0: { modelFolder: lod0, geometricError: 4.0 }
+      lod1: { modelFolder: lod1, geometricError: 1.2 }
+      lod2: { modelFolder: lod2, geometricError: 0.6 }
+      lod3:
+        modelFolder: lod3
+        geometricError: 0
+        localFirst: true
+        minioFallback: true
     enabled: true
     maintainable: true
     order: 6
@@ -472,6 +485,16 @@ Tilesets:
     name: 建筑
     url: http://localhost:48090/api/tilesets/tileset.json
     type: buildings
+    lod:
+      enabled: true
+      lod0: { modelFolder: lod0, geometricError: 4.0 }
+      lod1: { modelFolder: lod1, geometricError: 1.2 }
+      lod2: { modelFolder: lod2, geometricError: 0.6 }
+      lod3:
+        modelFolder: lod3
+        geometricError: 0
+        localFirst: true
+        minioFallback: true
     enabled: true
     maintainable: true
     order: 6

@@ -159,6 +159,7 @@ func (g *FeatureTileSetBuildCommand) Run() error {
 	for _, tc := range config.Instance().Tilesets {
 		if tc.Type == g.tilesetType {
 			geoTable.PartitionTableName = tc.Partition.Table
+			geoTable.LOD = tc.LOD
 			for _, source := range tc.Sources {
 				geoTable.GeoTableNames = append(geoTable.GeoTableNames, source.Table.Name)
 				geoTable.TilesetSources[source.Table.Name] = source

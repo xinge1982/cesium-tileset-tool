@@ -46,7 +46,7 @@ func TestGeoHashModelGroupKeyIncludesTableName(t *testing.T) {
 
 func TestEnsureLocalLODModelDirectories(t *testing.T) {
 	cfg := &config.Config{NetworkFolder: t.TempDir()}
-	cfg.LOD.LOD3.LocalFirst = true
+	lod := config.TilesetLODConfig{LOD3: config.TilesetLODLevelConfig{LocalFirst: true}}
 	levels := []tileLODLevel{
 		{Level: 0, ModelFolder: "lod0", GeometricError: 200},
 		{Level: 1, ModelFolder: "lod1", GeometricError: 80},
@@ -54,7 +54,7 @@ func TestEnsureLocalLODModelDirectories(t *testing.T) {
 		{Level: 3, ModelFolder: "lod3", GeometricError: 0},
 	}
 
-	if err := ensureLocalLODModelDirectories(cfg, levels); err != nil {
+	if err := ensureLocalLODModelDirectories(cfg, lod, levels); err != nil {
 		t.Fatal(err)
 	}
 	for _, folder := range []string{"lod0", "lod1", "lod2", "lod3"} {
@@ -167,13 +167,14 @@ func TestResolveLOD2ModelModeRejectsInvalidUnmatchedMode(t *testing.T) {
 
 func TestEnsureLocalLODModelDirectoriesRejectsInvalidErrors(t *testing.T) {
 	cfg := &config.Config{NetworkFolder: t.TempDir()}
+	lod := config.TilesetLODConfig{}
 	levels := []tileLODLevel{
 		{Level: 0, ModelFolder: "lod0", GeometricError: 80},
 		{Level: 1, ModelFolder: "lod1", GeometricError: 80},
 		{Level: 3, GeometricError: 0},
 	}
 
-	if err := ensureLocalLODModelDirectories(cfg, levels); err == nil {
+	if err := ensureLocalLODModelDirectories(cfg, lod, levels); err == nil {
 		t.Fatal("expected equal geometricError values to be rejected")
 	}
 }
@@ -206,14 +207,14 @@ func TestBuildLODNodeChain(t *testing.T) {
 }
 
 func TestGeohashGeometricErrorUsesConfiguredLODBase(t *testing.T) {
-	cfg := &config.Config{LOD: config.TilesetLODConfig{
+	lod := config.TilesetLODConfig{
 		Enabled: true,
 		LOD0:    config.TilesetLODLevelConfig{ModelFolder: "lod0", GeometricError: 100},
 		LOD1:    config.TilesetLODLevelConfig{ModelFolder: "lod1", GeometricError: 40},
 		LOD2:    config.TilesetLODLevelConfig{ModelFolder: "lod2", GeometricError: 16},
 		LOD3:    config.TilesetLODLevelConfig{GeometricError: 0},
-	}}
-	levels := configuredTileLODLevels(cfg)
+	}
+	levels := configuredTileLODLevels(lod)
 	if len(levels) != 4 || levels[0].GeometricError != 100 || levels[1].GeometricError != 40 || levels[2].GeometricError != 16 || levels[3].GeometricError != 0 {
 		t.Fatalf("unexpected configured LOD levels: %+v", levels)
 	}

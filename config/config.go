@@ -101,10 +101,10 @@ type PhotoListQueryOption struct {
 }
 
 type TilesetLODLevelConfig struct {
-	ModelFolder    string
-	GeometricError float64
-	LocalFirst     bool
-	MinioFallback  bool
+	ModelFolder    string  `yaml:"modelFolder" json:"modelFolder"`
+	GeometricError float64 `yaml:"geometricError" json:"geometricError"`
+	LocalFirst     bool    `yaml:"localFirst" json:"localFirst"`
+	MinioFallback  bool    `yaml:"minioFallback" json:"minioFallback"`
 }
 
 type TilesetSourceLODConfig struct {
@@ -124,11 +124,11 @@ type TilesetSourceConfig struct {
 }
 
 type TilesetLODConfig struct {
-	Enabled bool
-	LOD0    TilesetLODLevelConfig
-	LOD1    TilesetLODLevelConfig
-	LOD2    TilesetLODLevelConfig
-	LOD3    TilesetLODLevelConfig
+	Enabled bool                  `yaml:"enabled" json:"enabled"`
+	LOD0    TilesetLODLevelConfig `yaml:"lod0" json:"lod0"`
+	LOD1    TilesetLODLevelConfig `yaml:"lod1" json:"lod1"`
+	LOD2    TilesetLODLevelConfig `yaml:"lod2" json:"lod2"`
+	LOD3    TilesetLODLevelConfig `yaml:"lod3" json:"lod3"`
 }
 
 type DefaultView struct {
@@ -160,7 +160,6 @@ type Config struct {
 	DefaultView     *DefaultView             `yaml:"DefaultView" json:"defaultView,omitempty"` //默认视角
 	Tilesets        map[string]TilesetConfig //三维tileset
 	ImageTile       interface{}              //影像瓦片地址
-	LOD             TilesetLODConfig         //多级模型及切片参数
 	CardApis        []struct {
 		Url string
 	}
@@ -289,6 +288,7 @@ type TilesetConfig struct {
 	Sources        []TilesetSourceConfig `yaml:"sources" json:"sources"`
 	Options        [][]string            `yaml:"options" json:"options"`
 	BoundingVolume *BoundingVolumeConfig `yaml:"boundingVolume" json:"boundingVolume"`
+	LOD            TilesetLODConfig      `yaml:"lod" json:"lod"` //该Tileset独立的多级模型及切片参数
 }
 
 type BoundingVolumeConfig struct {
@@ -405,7 +405,6 @@ func viperConfig() *Config {
 	yaml.SetDefault("CertFilePath", "cert")
 	yaml.SetDefault("HttpDebug", false)
 	yaml.SetDefault("EnableAutoTilesetRebuild", true)
-	setTilesetLODDefaults(yaml)
 	yaml.SetDefault("Postgres", map[string]interface{}{
 		"Host":   "localhost",
 		"Port":   "5432",
@@ -505,7 +504,6 @@ func GetNetworkConfig(fn string) (*Config, error) {
 	yaml.SetDefault("Debug", false)
 	yaml.SetDefault("HttpDebug", false)
 	yaml.SetDefault("PublishToList", true)
-	setTilesetLODDefaults(yaml)
 	yaml.SetDefault("Postgres", map[string]interface{}{
 		"Host":   "localhost",
 		"Port":   "5432",
@@ -582,20 +580,6 @@ func GetNetworkConfig(fn string) (*Config, error) {
 	}
 
 	return &cfg, nil
-}
-
-func setTilesetLODDefaults(yaml *viper.Viper) {
-	yaml.SetDefault("LOD.Enabled", true)
-	yaml.SetDefault("LOD.LOD0.ModelFolder", "lod0")
-	yaml.SetDefault("LOD.LOD0.GeometricError", 200.0)
-	yaml.SetDefault("LOD.LOD1.ModelFolder", "lod1")
-	yaml.SetDefault("LOD.LOD1.GeometricError", 80.0)
-	yaml.SetDefault("LOD.LOD2.ModelFolder", "lod2")
-	yaml.SetDefault("LOD.LOD2.GeometricError", 25.0)
-	yaml.SetDefault("LOD.LOD3.ModelFolder", "lod3")
-	yaml.SetDefault("LOD.LOD3.GeometricError", 0.0)
-	yaml.SetDefault("LOD.LOD3.LocalFirst", true)
-	yaml.SetDefault("LOD.LOD3.MinioFallback", true)
 }
 
 func (c *Config) GetMinioBucket(name string) string {
