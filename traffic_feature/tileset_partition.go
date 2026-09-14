@@ -104,12 +104,13 @@ type TileSetModel struct {
 var AllTiles = []GeoTable{}
 
 const (
-	SignTileTableName   string = "hdtraffic_sign"
-	QbbTileTableName    string = "hdtraffic_qbb"
-	DeviceTileTableName string = "hdtraffic_ene"
-	PoleTileTableName   string = "hdpole"
-	GantryTileTableName string = "hdgantry"
-	BridgeTileTableName string = "hdtraffic_bridges"
+	SignTileTableName      string = "hdtraffic_sign"
+	QbbTileTableName       string = "hdtraffic_qbb"
+	DeviceTileTableName    string = "hdtraffic_ene"
+	DeviceSfzTileTableName string = "hdtraffic_ene_sfz"
+	PoleTileTableName      string = "hdpole"
+	GantryTileTableName    string = "hdgantry"
+	BridgeTileTableName    string = "hdtraffic_bridges"
 
 	MAX_GEOHASH_LEVEL int16 = 11
 	MIN_GEOHASH_LEVEL int16 = 3

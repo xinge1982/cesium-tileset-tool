@@ -1047,7 +1047,13 @@ onMounted(() => {
   viewer.scene.globe.depthTestAgainstTerrain = false
   viewer.scene.requestRenderMode = true
 
-  viewer.scene.globe.enableLighting = false
+  // 启用太阳光照
+  viewer.scene.globe.enableLighting = true
+
+  // 设置时间
+  const initTime = Cesium.JulianDate.fromIso8601('2025-09-22T10:00:00+08:00')
+  viewer.clock.shouldAnimate = false // 是否自动走时
+  viewer.clock.currentTime = initTime
 
   cesiumNavigator = new CesiumNavigation(viewer, {
     enableCompass: true,

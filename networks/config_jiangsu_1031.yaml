@@ -220,6 +220,58 @@ Tilesets:
               type: geom
               column: geom
 
+      - id: device-sfz
+        name: 收费站设备
+
+        lod:
+          lod2ModelMode: copy-lod3-by-prefix
+          lod2ModelPrefixes:
+            - sxj_
+            - dld_
+            - sft_
+            - etc_
+            - cxjcq_
+          lod2UnmatchedMode: local
+
+        match:
+          operator: prefix
+          value: hdtraffic_ene_sfz
+
+        keyMapping:
+          operator: removePrefix
+          value: hdtraffic_ene_sfz.
+
+        table:
+          schema: public
+          name: hdtraffic_ene_sfz
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: false
+            submit: false
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+
       - id: gantry
         name: 门架
 
@@ -340,9 +392,23 @@ Tilesets:
     type: bridges
     lod:
       enabled: true
-      lod0: { modelFolder: lod0, geometricError: 4.0 }
-      lod1: { modelFolder: lod1, geometricError: 1.2 }
-      lod2: { modelFolder: lod2, geometricError: 0.6 }
+
+      # 远距离：桥面水平投影 + 桥塔前后贴片
+      lod0:
+        modelFolder: lod0
+        geometricError: 120.0
+
+      # 中远距离：桥面、桥墩、桥塔等主体简化结构
+      lod1:
+        modelFolder: lod1
+        geometricError: 35.0
+
+      # 近距离：主要结构和附属设施
+      lod2:
+        modelFolder: lod2
+        geometricError: 7.0
+
+      # 最近距离：完整精细模型
       lod3:
         modelFolder: lod3
         geometricError: 0
@@ -483,7 +549,7 @@ Tilesets:
 
   其他设施:
     name: 建筑
-    url: http://localhost:48090/api/tilesets/tileset.json
+    url: https://tileset.amap3d.online:48611/share/jiangsu/%E6%B1%9F%E8%8B%8F02/features/tileset.json
     type: buildings
     lod:
       enabled: true
@@ -546,6 +612,9 @@ Tilesets:
             storage:
               type: geom
               column: geom
+    options:
+      - ["modelForwardAxis","Y"]
+      - ["modelUpAxis", "Z"]
     boundingVolume:
       scale: 4.0
       minimumRadius: 50.0

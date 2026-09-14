@@ -1143,6 +1143,14 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 			for _, hashModels := range vs {
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
+		case DeviceSfzTileTableName:
+			vs, errQ := QueryDevicesSfzByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
 		case PoleTileTableName:
 			vs, errQ := QueryPolesByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
 			if errQ != nil {
@@ -1385,6 +1393,32 @@ func QueryQbbsByGeohashBBox(configName string, db *gorm.DB, geohash string, boun
 	}
 
 	models, err2 := getModelContentFromMinio(db, configName, qbbs, lod)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	return models, err
+}
+
+// 查询分片的所有模型数据
+func QueryDevicesSfzByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
+	var devices []*GeoHashModel
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.id, dev.chn_name as name, 'hdDevice' as type, dev.model, '%s' as table_name, 
+		       ST_X(ST_TRANSFORM(dev.geom, 4326)) AS lng,
+		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
+		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, 
+		       dev.transform, dev.obj_angle
+		FROM %s dev
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, DeviceSfzTileTableName, DeviceSfzTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+	if err != nil {
+		return nil, err
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
 	if err2 != nil {
 		return nil, err2
 	}
