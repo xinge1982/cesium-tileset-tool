@@ -110,6 +110,12 @@ def parse_bounds(value: str | None) -> tuple[float, float, float, float] | None:
     return west, south, east, north
 
 
+def canonical_id(value: Any) -> str:
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
 def load_ids(path: Path, field: str) -> list[str]:
     with path.open("r", encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
@@ -120,7 +126,7 @@ def load_ids(path: Path, field: str) -> list[str]:
         result: list[str] = []
         seen: set[str] = set()
         for row_number, row in enumerate(reader, 2):
-            value = (row.get(field) or "").strip()
+            value = canonical_id(row.get(field) or "")
             if not value:
                 print(f"WARN CSV row {row_number}: empty {field}, skipped")
             elif value not in seen:
@@ -529,7 +535,7 @@ def find_matches(
             if values is None:
                 continue
             for index, value in enumerate(values):
-                feature_id = str(value)
+                feature_id = canonical_id(value)
                 if feature_id in requested and feature_id not in matches:
                     matches[feature_id] = (tile, index)
         if len(matches) == len(requested):
