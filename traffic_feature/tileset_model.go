@@ -1130,6 +1130,14 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 			for _, hashModels := range vs {
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
+		case QbbTileTableName:
+			vs, errQ := QueryQbbsByGeohashBBox(configName, db, geoHash, bound)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
 		case DeviceTileTableName:
 			vs, errQ := QueryDevicesByGeohashBBox(configName, db, geoHash, bound)
 			if errQ != nil {
@@ -1359,6 +1367,32 @@ func FindNodeByGeohash(root *TileNode, target string) *TileNode {
 
 	// 3. 递归都没有找到
 	return nil
+}
+
+// 查询分片的所有模型数据
+func QueryQbbsByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound) (map[string][]*GeoHashModel, error) {
+	var qbbs []*GeoHashModel
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.id, dev.chn_name as name, 'hdQbb' as type, dev.model, '%s' as table_name, 
+		       ST_X(ST_TRANSFORM(dev.geom, 4326)) AS lng,
+		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
+		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, 
+		       dev.transform, dev.obj_angle
+		FROM %s dev
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, QbbTileTableName, QbbTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&qbbs).Error
+	if err != nil {
+		return nil, err
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, qbbs)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	return models, err
 }
 
 // 查询分片的所有模型数据
@@ -1641,6 +1675,8 @@ func getModelContentFromMinio(db *gorm.DB, cfgName string, devices []*GeoHashMod
 			case "hdGantry":
 				client, bucketName, prefix, errG = minioconn.GetMinioBaseGltfClient(code)
 			case "hdDevice":
+				client, bucketName, prefix, errG = minioconn.GetMinioBaseGltfClient(code)
+			case "hdQbb":
 				client, bucketName, prefix, errG = minioconn.GetMinioBaseGltfClient(code)
 			default:
 				return nil, fmt.Errorf("生成模型设备类型错误: %s", device.Type)

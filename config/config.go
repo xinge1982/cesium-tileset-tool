@@ -277,17 +277,24 @@ type Config struct {
 }
 
 type TilesetConfig struct {
-	Name         string                `yaml:"name" json:"name"`
-	URL          string                `yaml:"url" json:"url"`
-	Type         string                `yaml:"type" json:"type"`
-	Enabled      bool                  `yaml:"enabled" json:"enabled"`
-	Maintainable bool                  `yaml:"maintainable" json:"maintainable"`
-	Partition    Partition             `yaml:"partition" json:"partition"`
-	ZClip        ZClipConfig           `yaml:"zclip" json:"zclip"`
-	Order        int                   `yaml:"order" json:"order"`
-	Feature      FeatureConfig         `yaml:"feature" json:"feature"`
-	Sources      []TilesetSourceConfig `yaml:"sources" json:"sources"`
-	Options      [][]string            `yaml:"options" json:"options"`
+	Name           string                `yaml:"name" json:"name"`
+	URL            string                `yaml:"url" json:"url"`
+	Type           string                `yaml:"type" json:"type"`
+	Enabled        bool                  `yaml:"enabled" json:"enabled"`
+	Maintainable   bool                  `yaml:"maintainable" json:"maintainable"`
+	Partition      Partition             `yaml:"partition" json:"partition"`
+	ZClip          ZClipConfig           `yaml:"zclip" json:"zclip"`
+	Order          int                   `yaml:"order" json:"order"`
+	Feature        FeatureConfig         `yaml:"feature" json:"feature"`
+	Sources        []TilesetSourceConfig `yaml:"sources" json:"sources"`
+	Options        [][]string            `yaml:"options" json:"options"`
+	BoundingVolume *BoundingVolumeConfig `yaml:"boundingVolume" json:"boundingVolume"`
+}
+
+type BoundingVolumeConfig struct {
+	Scale                 float32 `yaml:"scale" json:"scale"`
+	MinimumRadius         float32 `yaml:"minimumRadius" json:"minimumRadius"`
+	DisableBoundingVolume bool    `yaml:"disableBoundingVolume" json:"disableBoundingVolume"`
 }
 
 type Partition struct {

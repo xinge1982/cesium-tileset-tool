@@ -9,16 +9,17 @@ import (
 )
 
 type TilesetMenuItem struct {
-	Value             string                  `json:"value"`
-	Label             string                  `json:"label"`
-	Type              string                  `json:"type,omitempty"`
-	Url               string                  `json:"url,omitempty"`
-	Options           [][]string              `json:"options,omitempty"`
-	Children          []TilesetSourceMenuItem `json:"children"`
-	IdField           string                  `json:"idField,omitempty"`
-	ZClip             config.ZClipConfig      `json:"zClip,omitempty"`
-	FeatureIdField    string                  `json:"featureIdField,omitempty"`    //数据对应tileset的字段名称
-	FeatureValueField string                  `json:"featureValueField,omitempty"` //数据对应tileset的字段值列名称
+	Value             string                       `json:"value"`
+	Label             string                       `json:"label"`
+	Type              string                       `json:"type,omitempty"`
+	Url               string                       `json:"url,omitempty"`
+	Options           [][]string                   `json:"options,omitempty"`
+	Children          []TilesetSourceMenuItem      `json:"children"`
+	IdField           string                       `json:"idField,omitempty"`
+	ZClip             config.ZClipConfig           `json:"zClip,omitempty"`
+	FeatureIdField    string                       `json:"featureIdField,omitempty"`    //数据对应tileset的字段名称
+	FeatureValueField string                       `json:"featureValueField,omitempty"` //数据对应tileset的字段值列名称
+	BoundingVolume    *config.BoundingVolumeConfig `json:"boundingVolume,omitempty"`
 }
 
 type TilesetSourceMenuItem struct {
@@ -140,6 +141,7 @@ func (service *TilesetSourceSearchService) GetTilesetMenu() []TilesetMenuItem {
 				Value:          current.key,
 				Url:            current.tileset.URL,
 				Options:        current.tileset.Options,
+				BoundingVolume: current.tileset.BoundingVolume,
 				Label:          label,
 				Type:           current.tileset.Type,
 				Children:       children,

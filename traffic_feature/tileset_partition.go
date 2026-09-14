@@ -104,6 +104,7 @@ var AllTiles = []GeoTable{}
 
 const (
 	SignTileTableName   string = "hdtraffic_sign"
+	QbbTileTableName    string = "hdtraffic_qbb"
 	DeviceTileTableName string = "hdtraffic_ene"
 	PoleTileTableName   string = "hdpole"
 	GantryTileTableName string = "hdgantry"

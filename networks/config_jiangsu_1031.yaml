@@ -121,6 +121,51 @@ Tilesets:
               type: geom
               column: geom
 
+      - id: qbb
+        name: 情报板
+
+        lod:
+          lod2ModelMode: copy-lod3
+
+        match:
+          operator: prefix
+          value: hdtraffic_qbb
+
+        keyMapping:
+          operator: removePrefix
+          value: hdtraffic_qbb.
+
+        table:
+          schema: public
+          name: hdtraffic_qbb
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: false
+            submit: false
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+
       - id: device
         name: 设备
 
@@ -423,6 +468,65 @@ Tilesets:
       - ["modelForwardAxis","Y"]
       - ["modelUpAxis", "Z"]
 
+  其他设施:
+    name: 建筑
+    url: http://localhost:48090/api/tilesets/tileset.json
+    type: buildings
+    enabled: true
+    maintainable: true
+    order: 6
+    feature:
+      idField: id
+      sourceField: id
+    sources:
+      - id: toll
+        name: 收费站
+
+        lod:
+          lod2ModelMode: copy-lod3
+
+        match:
+          operator: prefix
+          value: hdtoll_stations
+
+        keyMapping:
+          operator: removePrefix
+          value: hdtoll_stations.
+
+        table:
+          schema: public
+          name: hdtoll_stations
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: false
+            submit: false
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+    boundingVolume:
+      scale: 4.0
+      minimumRadius: 50.0
+      disableBoundingVolume: true
 
 ImageTile: https://webst01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=6&x={x}&y={y}&z={z}
 

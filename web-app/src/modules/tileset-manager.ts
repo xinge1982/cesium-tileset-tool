@@ -10,6 +10,7 @@ export interface TilesetConfig {
   label: string
   url?: string
   options?: string[][]
+  boundingVolume?: any
   zClip?: ZClipConfig
 }
 
@@ -235,6 +236,61 @@ export class TilesetManager {
     this.emitVisibleLODContents()
   }
 
+  // Cesium 1.117 会使用模型 DrawCommand 的包围球划分渲染视锥。
+  // 部分设施数据的包围球偏小，旋转相机时可能被分配到错误的视锥而消失。
+  // 此补丁只放大指定 tileset 的模型命令包围球，不修改官方 Cesium.js。
+  private applyModelBoundingVolumeWorkaround(tileset:any, options:any = {}) {
+    const scale = options.scale ?? 2.0;
+    const minimumRadius = options.minimumRadius ?? 50.0;
+    const disableBoundingVolume = options.disableBoundingVolume ?? false;
+    const originalUpdateForPass = tileset.updateForPass;
+    const originalRadiusMap = new WeakMap();
+
+    tileset.updateForPass = function (frameState:any, tilesetPassState:any) {
+      const commandList =
+          tilesetPassState.commandList || frameState.commandList;
+      const commandStart = commandList.length;
+
+      originalUpdateForPass.call(this, frameState, tilesetPassState);
+
+      for (let i = commandStart; i < commandList.length; i++) {
+        const command = commandList[i];
+        const model = command.owner;
+        const content = model && model.content;
+
+        // 只处理当前 tileset 中由 B3DM、I3DM 或 CMPT 产生的模型命令。
+        if (!content || content.tileset !== this) {
+          continue;
+        }
+
+        command.cull = false;
+
+        if (disableBoundingVolume) {
+          // 如果包围球中心本身也不正确，可启用此兜底模式。
+          command.boundingVolume = undefined;
+          continue;
+        }
+
+        const boundingVolume = command.boundingVolume;
+        if (!boundingVolume || typeof boundingVolume.radius !== "number") {
+          continue;
+        }
+
+        let originalRadius = originalRadiusMap.get(boundingVolume);
+        if (originalRadius === undefined) {
+          originalRadius = boundingVolume.radius;
+          originalRadiusMap.set(boundingVolume, originalRadius);
+        }
+
+        boundingVolume.radius = Math.max(
+            boundingVolume.radius,
+            originalRadius * scale,
+            minimumRadius,
+        );
+      }
+    };
+  }
+
   private async load(config: TilesetConfig, entry: ManagedEntry): Promise<void> {
     try {
       let tileUrl = entry.state.url
@@ -243,10 +299,13 @@ export class TilesetManager {
       }
       const tileset = await Cesium.Cesium3DTileset.fromUrl(
         tileUrl,
-        this.parseOptions(config.options),
+          this.parseOptions(config.options),
       )
       entry.tileset = tileset
       tileset.show = entry.state.visible
+      if (config.boundingVolume) {
+        this.applyModelBoundingVolumeWorkaround(tileset, config.boundingVolume)
+      }
       this.applyCesiumLODDebugSettings(tileset, this.lodDebugEnabled)
       this.viewer.scene.primitives.add(tileset)
 
