@@ -4,8 +4,8 @@
 The generated model origin is the center of the footprint's bottom bounding
 box. GLB data follows glTF's Y-up convention, so Blender's glTF importer shows
 the building rising along Blender +Z. The single-storey facade texture repeats
-vertically exactly <s_height> times. A placement CSV records the WGS84 anchor
-used by every GLB.
+vertically exactly <s_height> times and restarts horizontally at every facade
+corner. A placement CSV records the WGS84 anchor used by every GLB.
 
 Simple configuration (the same textures for all selected types):
 
@@ -428,7 +428,6 @@ def create_glb(
     wall_normals: list[tuple[float, float, float]] = []
     wall_uvs: list[tuple[float, float]] = []
     wall_indices: list[int] = []
-    distance_u = 0.0
     for index, start in enumerate(footprint):
         end = footprint[(index + 1) % len(footprint)]
         dx, dy = end[0] - start[0], end[1] - start[1]
@@ -446,13 +445,14 @@ def create_glb(
             (start[0], height, -start[1]),
         ))
         wall_normals.extend((normal, normal, normal, normal))
-        u0, u1 = distance_u / wall_repeat_width, (distance_u + length) / wall_repeat_width
+        # Every footprint edge owns separate vertices. Restart U at each edge
+        # so a facade texture never continues around a building corner.
+        u0, u1 = 0.0, length / wall_repeat_width
         # The facade image represents exactly one storey, so its vertical UV
         # range is the CSV storey count rather than a metre-based estimate.
         v1 = storeys
         wall_uvs.extend(((u0, 0.0), (u1, 0.0), (u1, v1), (u0, v1)))
         wall_indices.extend((first, first + 1, first + 2, first, first + 2, first + 3))
-        distance_u += length
 
     roof_positions = [(x, height, -y) for x, y in footprint]
     roof_normals = [(0.0, 1.0, 0.0)] * len(footprint)
