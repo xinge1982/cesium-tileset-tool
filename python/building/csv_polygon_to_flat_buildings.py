@@ -3,7 +3,8 @@
 
 The generated model origin is the center of the footprint's bottom bounding
 box. Bottom vertices are at local Z=0 and the horizontal roof is at
-Z=<height>. A placement CSV records the WGS84 anchor used by every GLB.
+Z=<height>. The single-storey facade texture repeats vertically exactly
+<s_height> times. A placement CSV records the WGS84 anchor used by every GLB.
 
 Simple configuration (the same textures for all selected types):
 
@@ -120,6 +121,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--id-field", default="id")
     parser.add_argument("--type-field", default="type")
     parser.add_argument("--height-field", default="height")
+    parser.add_argument(
+        "--storey-field",
+        default="s_height",
+        help="CSV field containing the wall texture's vertical repeat count "
+             "(default: s_height)",
+    )
     parser.add_argument("--geometry-field", default="WKT")
     parser.add_argument(
         "--base-altitude",
@@ -132,12 +139,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=5.0,
         help="wall texture horizontal repeat size in metres",
-    )
-    parser.add_argument(
-        "--wall-repeat-height",
-        type=float,
-        default=4.0,
-        help="wall texture vertical repeat size in metres",
     )
     parser.add_argument(
         "--roof-repeat-size",
@@ -415,10 +416,10 @@ def add_primitive(
 def create_glb(
     footprint: list[tuple[float, float]],
     height: float,
+    storeys: float,
     style: TypeStyle,
     destination: Path,
     wall_repeat_width: float,
-    wall_repeat_height: float,
     roof_repeat_size: float,
 ) -> None:
     roof_triangles = triangulate(footprint)
@@ -443,7 +444,9 @@ def create_glb(
         ))
         wall_normals.extend((normal, normal, normal, normal))
         u0, u1 = distance_u / wall_repeat_width, (distance_u + length) / wall_repeat_width
-        v1 = height / wall_repeat_height
+        # The facade image represents exactly one storey, so its vertical UV
+        # range is the CSV storey count rather than a metre-based estimate.
+        v1 = storeys
         wall_uvs.extend(((u0, 0.0), (u1, 0.0), (u1, v1), (u0, v1)))
         wall_indices.extend((first, first + 1, first + 2, first, first + 2, first + 3))
         distance_u += length
@@ -541,7 +544,6 @@ def main() -> int:
         return 2
     if min(
         args.wall_repeat_width,
-        args.wall_repeat_height,
         args.roof_repeat_size,
     ) <= 0 or args.limit < 0:
         print("error: texture repeat sizes must be positive and limit non-negative", file=sys.stderr)
@@ -557,14 +559,15 @@ def main() -> int:
     manifest_path = output_dir / f"{input_path.stem}_placements.csv"
     manifest_fields = [
         "id", "type", "model", "longitude", "latitude", "altitude",
-        "height", "origin", "sourceRow",
+        "height", "storeys", "origin", "sourceRow",
     ]
     generated = skipped = ignored = failed = 0
     manifest_rows: list[dict[str, Any]] = []
     with input_path.open("r", encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
         required = {
-            args.id_field, args.type_field, args.height_field, args.geometry_field,
+            args.id_field, args.type_field, args.height_field,
+            args.storey_field, args.geometry_field,
         }
         missing = required.difference(reader.fieldnames or [])
         if missing:
@@ -590,13 +593,17 @@ def main() -> int:
                 height = float((row.get(args.height_field) or "").strip())
                 if not math.isfinite(height) or height <= 0:
                     raise ValueError(f"invalid height {row.get(args.height_field)!r}")
+                storeys = float((row.get(args.storey_field) or "").strip())
+                if not math.isfinite(storeys) or storeys <= 0:
+                    raise ValueError(
+                        f"invalid storey count {row.get(args.storey_field)!r}"
+                    )
                 points = parse_polygon_z(row.get(args.geometry_field) or "")
                 footprint, longitude, latitude = local_footprint(points)
                 altitude = selected_altitude(points, args.base_altitude)
                 create_glb(
-                    footprint, height, style, destination,
-                    args.wall_repeat_width, args.wall_repeat_height,
-                    args.roof_repeat_size,
+                    footprint, height, storeys, style, destination,
+                    args.wall_repeat_width, args.roof_repeat_size,
                 )
                 manifest_rows.append({
                     "id": identifier,
@@ -606,6 +613,7 @@ def main() -> int:
                     "latitude": f"{latitude:.12f}",
                     "altitude": f"{altitude:.6f}",
                     "height": f"{height:.6f}",
+                    "storeys": f"{storeys:g}",
                     "origin": "bottom-bounding-box-center",
                     "sourceRow": row_number,
                 })
