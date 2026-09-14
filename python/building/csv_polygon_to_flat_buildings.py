@@ -2,9 +2,10 @@
 """Create textured flat-roof building GLBs from POLYGON Z CSV rows.
 
 The generated model origin is the center of the footprint's bottom bounding
-box. Bottom vertices are at local Z=0 and the horizontal roof is at
-Z=<height>. The single-storey facade texture repeats vertically exactly
-<s_height> times. A placement CSV records the WGS84 anchor used by every GLB.
+box. GLB data follows glTF's Y-up convention, so Blender's glTF importer shows
+the building rising along Blender +Z. The single-storey facade texture repeats
+vertically exactly <s_height> times. A placement CSV records the WGS84 anchor
+used by every GLB.
 
 Simple configuration (the same textures for all selected types):
 
@@ -434,13 +435,15 @@ def create_glb(
         length = math.hypot(dx, dy)
         if length <= 1e-6:
             continue
-        normal = (dy / length, -dx / length, 0.0)
+        # Convert the local ENU coordinates to glTF's standard Y-up axes:
+        # (east, north, up) -> (X, Y, Z) = (east, up, -north).
+        normal = (dy / length, 0.0, dx / length)
         first = len(wall_positions)
         wall_positions.extend((
-            (start[0], start[1], 0.0),
-            (end[0], end[1], 0.0),
-            (end[0], end[1], height),
-            (start[0], start[1], height),
+            (start[0], 0.0, -start[1]),
+            (end[0], 0.0, -end[1]),
+            (end[0], height, -end[1]),
+            (start[0], height, -start[1]),
         ))
         wall_normals.extend((normal, normal, normal, normal))
         u0, u1 = distance_u / wall_repeat_width, (distance_u + length) / wall_repeat_width
@@ -451,8 +454,8 @@ def create_glb(
         wall_indices.extend((first, first + 1, first + 2, first, first + 2, first + 3))
         distance_u += length
 
-    roof_positions = [(x, y, height) for x, y in footprint]
-    roof_normals = [(0.0, 0.0, 1.0)] * len(footprint)
+    roof_positions = [(x, height, -y) for x, y in footprint]
+    roof_normals = [(0.0, 1.0, 0.0)] * len(footprint)
     roof_uvs = [(x / roof_repeat_size, y / roof_repeat_size) for x, y in footprint]
     roof_indices = [value for triangle in roof_triangles for value in triangle]
 
@@ -582,9 +585,7 @@ def main() -> int:
             if args.limit and generated >= args.limit:
                 break
             identifier = (row.get(args.id_field) or "").strip()
-            destination = output_dir / (
-                f"{safe_filename(input_path.stem)}_{safe_filename(identifier)}.glb"
-            )
+            destination = output_dir / f"{safe_filename(identifier)}.glb"
             if destination.exists() and not args.overwrite:
                 skipped += 1
                 print(f"SKIP row {row_number}: {destination.name} exists")
