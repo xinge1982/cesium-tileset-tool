@@ -199,10 +199,13 @@ def parse_polygon_z(wkt: str) -> list[tuple[float, float, float]]:
     match = WKT_POLYGON_RE.match(wkt)
     if not match:
         raise ValueError("geometry is not a simple POLYGON/POLYGON Z")
-    if re.search(r"\)\s*,\s*\(", match.group(1)):
-        raise ValueError("polygon holes are not supported")
+    # The model generator only needs the exterior footprint. When WKT has
+    # interior rings, discard every hole and continue with the first ring.
+    exterior_ring = re.split(
+        r"\)\s*,\s*\(", match.group(1), maxsplit=1,
+    )[0]
     points: list[tuple[float, float, float]] = []
-    for token in match.group(1).split(","):
+    for token in exterior_ring.split(","):
         values = token.strip().split()
         if len(values) < 2:
             raise ValueError(f"invalid polygon coordinate: {token!r}")
@@ -217,6 +220,15 @@ def parse_polygon_z(wkt: str) -> list[tuple[float, float, float]]:
     if len(points) < 3:
         raise ValueError("polygon has fewer than three unique vertices")
     return points
+
+
+def parse_storeys(value: Any) -> float:
+    """Return a usable facade repeat count, defaulting invalid values to 1."""
+    try:
+        storeys = float(str(value or "").strip())
+    except (TypeError, ValueError):
+        return 1.0
+    return storeys if math.isfinite(storeys) and storeys > 0 else 1.0
 
 
 def local_footprint(
@@ -586,11 +598,7 @@ def main() -> int:
                 height = float((row.get(args.height_field) or "").strip())
                 if not math.isfinite(height) or height <= 0:
                     raise ValueError(f"invalid height {row.get(args.height_field)!r}")
-                storeys = float((row.get(args.storey_field) or "").strip())
-                if not math.isfinite(storeys) or storeys <= 0:
-                    raise ValueError(
-                        f"invalid storey count {row.get(args.storey_field)!r}"
-                    )
+                storeys = parse_storeys(row.get(args.storey_field))
                 points = parse_polygon_z(row.get(args.geometry_field) or "")
                 footprint, longitude, latitude = local_footprint(points)
                 _, _, altitude = source_bbox_center(points)
