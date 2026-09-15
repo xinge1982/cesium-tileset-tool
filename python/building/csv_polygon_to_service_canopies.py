@@ -62,8 +62,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--thickness",
         type=float,
-        default=0.30,
-        help="canopy thickness in metres (default: 0.30)",
+        default=1.0,
+        help="canopy thickness in metres (default: 1.0)",
     )
     parser.add_argument(
         "--side-repeat-width",
@@ -74,8 +74,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--surface-repeat-size",
         type=float,
-        default=10.0,
-        help="top/bottom texture repeat size in metres (default: 10.0)",
+        default=4.0,
+        help="top/bottom texture repeat size in metres (default: 4.0)",
     )
     parser.add_argument("--id-field", default="id")
     parser.add_argument("--type-field", default="type")
