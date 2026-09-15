@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cesium-tileset-tool/env"
 	"cesium-tileset-tool/utils"
 	"crypto/aes"
 	"crypto/cipher"
@@ -44,8 +45,6 @@ const (
 	DefaultHistrackInterval              = time.Millisecond * time.Duration(1000/DefaultTrackFramerate) //回放默认帧间隔
 	DataFileInterval                     = time.Duration(30) * time.Minute
 )
-
-const key = "mapabc 32 bit long passphrase!!!"
 
 // debug用cross编号对应
 var debugCrossIdMap = make(map[string]mapset.Set)
@@ -831,7 +830,7 @@ func generateMD5Hash(dbAddr, tableName string) string {
 // 编码配置地址和表名为哈希字符串
 func EncodeContext(configName, tableName string) string {
 	combined := fmt.Sprintf("%s||%s", configName, tableName)
-	encrypted, err := encrypt(combined, key)
+	encrypted, err := encrypt(combined, env.ConfigKey)
 	if err != nil {
 		log.Error(err)
 		return ""
@@ -841,7 +840,7 @@ func EncodeContext(configName, tableName string) string {
 
 // 解码哈希字符串，解析出配置地址和表名
 func DecodeContext(hash string) (string, string, error) {
-	decrypted, err := decrypt(hash, key)
+	decrypted, err := decrypt(hash, env.ConfigKey)
 	if err != nil {
 		log.Error(err)
 		return "", "", err
