@@ -107,6 +107,12 @@ type TilesetLODLevelConfig struct {
 }
 
 type TilesetSourceLODConfig struct {
+	LOD0ModelMode     string   `yaml:"lod0ModelMode" json:"lod0ModelMode"`
+	LOD0ModelPrefixes []string `yaml:"lod0ModelPrefixes" json:"lod0ModelPrefixes"`
+	LOD0UnmatchedMode string   `yaml:"lod0UnmatchedMode" json:"lod0UnmatchedMode"`
+	LOD1ModelMode     string   `yaml:"lod1ModelMode" json:"lod1ModelMode"`
+	LOD1ModelPrefixes []string `yaml:"lod1ModelPrefixes" json:"lod1ModelPrefixes"`
+	LOD1UnmatchedMode string   `yaml:"lod1UnmatchedMode" json:"lod1UnmatchedMode"`
 	LOD2ModelMode     string   `yaml:"lod2ModelMode" json:"lod2ModelMode"`
 	LOD2ModelPrefixes []string `yaml:"lod2ModelPrefixes" json:"lod2ModelPrefixes"`
 	LOD2UnmatchedMode string   `yaml:"lod2UnmatchedMode" json:"lod2UnmatchedMode"`

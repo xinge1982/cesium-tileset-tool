@@ -65,7 +65,7 @@ func TestEnsureLocalLODModelDirectories(t *testing.T) {
 	}
 }
 
-func TestLoadLOD2ModelsBySourceCopiesLOD3Model(t *testing.T) {
+func TestLoadLODModelsBySourceCopiesLOD3Model(t *testing.T) {
 	networkFolder := t.TempDir()
 	cfg := &config.Config{NetworkFolder: networkFolder}
 	level := tileLODLevel{Level: 2, ModelFolder: "lod2", GeometricError: 25}
@@ -80,7 +80,7 @@ func TestLoadLOD2ModelsBySourceCopiesLOD3Model(t *testing.T) {
 	}}
 	cache := &localLODModelCache{models: make(map[string]*GltfModel)}
 
-	loaded, err := loadLOD2ModelsBySource(cfg, geoTable, level, source, cache)
+	loaded, err := loadLODModelsBySource(cfg, geoTable, level, source, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestLoadLOD2ModelsBySourceCopiesLOD3Model(t *testing.T) {
 	}
 }
 
-func TestLoadLOD2ModelsBySourceReusesLOD3WithoutCopy(t *testing.T) {
+func TestLoadLODModelsBySourceReusesLOD3WithoutCopy(t *testing.T) {
 	networkFolder := t.TempDir()
 	cfg := &config.Config{NetworkFolder: networkFolder}
 	level := tileLODLevel{Level: 2, ModelFolder: "lod2", GeometricError: 25}
@@ -112,7 +112,7 @@ func TestLoadLOD2ModelsBySourceReusesLOD3WithoutCopy(t *testing.T) {
 	}}
 	cache := &localLODModelCache{models: make(map[string]*GltfModel)}
 
-	loaded, err := loadLOD2ModelsBySource(cfg, geoTable, level, source, cache)
+	loaded, err := loadLODModelsBySource(cfg, geoTable, level, source, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestLoadLOD2ModelsBySourceReusesLOD3WithoutCopy(t *testing.T) {
 	}
 }
 
-func TestResolveLOD2ModelModeByPrefix(t *testing.T) {
+func TestResolveLODModelModeByPrefix(t *testing.T) {
 	lod := config.TilesetSourceLODConfig{
 		LOD2ModelMode:     "copy-lod3-by-prefix",
 		LOD2ModelPrefixes: []string{"sxj_", "device/camera/"},
@@ -143,25 +143,69 @@ func TestResolveLOD2ModelModeByPrefix(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveLOD2ModelMode(lod, tt.modelName)
+			got, err := resolveLODModelMode(lod, 2, tt.modelName)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got != tt.want {
-				t.Fatalf("resolveLOD2ModelMode(%q) = %q, want %q", tt.modelName, got, tt.want)
+				t.Fatalf("resolveLODModelMode(%q) = %q, want %q", tt.modelName, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestResolveLOD2ModelModeRejectsInvalidUnmatchedMode(t *testing.T) {
+func TestResolveLODModelModeRejectsInvalidUnmatchedMode(t *testing.T) {
 	lod := config.TilesetSourceLODConfig{
 		LOD2ModelMode:     "copy-lod3-by-prefix",
 		LOD2ModelPrefixes: []string{"sxj_"},
 		LOD2UnmatchedMode: "invalid",
 	}
-	if _, err := resolveLOD2ModelMode(lod, "other.glb"); err == nil {
+	if _, err := resolveLODModelMode(lod, 2, "other.glb"); err == nil {
 		t.Fatal("expected invalid lod2UnmatchedMode to be rejected")
+	}
+}
+
+func TestResolveLODModelModeForEveryConfiguredLevel(t *testing.T) {
+	lod := config.TilesetSourceLODConfig{
+		LOD0ModelMode:     "copy-lod3-by-prefix",
+		LOD0ModelPrefixes: []string{"lod0_"},
+		LOD0UnmatchedMode: "skip",
+		LOD1ModelMode:     "reuse-lod3",
+		LOD2ModelMode:     "copy-lod3",
+	}
+	tests := []struct {
+		name      string
+		level     int
+		modelName string
+		want      string
+	}{
+		{name: "lod0 matching prefix", level: 0, modelName: "lod0_sign.glb", want: "copy-lod3"},
+		{name: "lod0 unmatched", level: 0, modelName: "sign.glb", want: "skip"},
+		{name: "lod1", level: 1, modelName: "sign.glb", want: "reuse-lod3"},
+		{name: "lod2", level: 2, modelName: "sign.glb", want: "copy-lod3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveLODModelMode(lod, tt.level, tt.modelName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("LOD%d mode = %q, want %q", tt.level, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveLODModelModeDefaultsToLocal(t *testing.T) {
+	for level := 0; level <= 2; level++ {
+		got, err := resolveLODModelMode(config.TilesetSourceLODConfig{}, level, "model.glb")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "local" {
+			t.Fatalf("LOD%d default mode = %q, want local", level, got)
+		}
 	}
 }
 

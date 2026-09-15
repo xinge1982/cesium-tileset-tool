@@ -761,12 +761,8 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 				for _, lodLevel := range lodLevels {
 					lodModels := models
 					if lodLevel.Level < 3 {
-						if lodLevel.Level == 2 {
-							lodModels, err2 = loadLOD2ModelsBySource(
-								cfg, geoTable, lodLevel, models, localModelCache)
-						} else {
-							lodModels, err2 = loadLocalLODModels(cfg, lodLevel, models, localModelCache)
-						}
+						lodModels, err2 = loadLODModelsBySource(
+							cfg, geoTable, lodLevel, models, localModelCache)
 						if err2 != nil {
 							results <- TileJobResult{err: err2}
 							builtLODs = nil
@@ -930,8 +926,11 @@ func localLODModelPath(root, tableName, modelName string, level int) (string, er
 	return filepath.Join(root, cleanTable, cleanName), nil
 }
 
-func loadLOD2ModelsBySource(cfg *config.Config, geoTable GeoTable, level tileLODLevel,
+func loadLODModelsBySource(cfg *config.Config, geoTable GeoTable, level tileLODLevel,
 	source map[string][]*GeoHashModel, cache *localLODModelCache) (map[string][]*GeoHashModel, error) {
+	if level.Level < 0 || level.Level > 2 {
+		return nil, fmt.Errorf("source LOD model configuration does not support LOD%d", level.Level)
+	}
 	result := make(map[string][]*GeoHashModel)
 	for _, instances := range source {
 		if len(instances) == 0 || instances[0] == nil {
@@ -942,10 +941,10 @@ func loadLOD2ModelsBySource(cfg *config.Config, geoTable GeoTable, level tileLOD
 		if sourceCfg, ok := geoTable.TilesetSources[tableName]; ok {
 			sourceLOD = sourceCfg.LOD
 		}
-		mode, err := resolveLOD2ModelMode(sourceLOD, instances[0].Model)
+		mode, err := resolveLODModelMode(sourceLOD, level.Level, instances[0].Model)
 		if err != nil {
-			return nil, fmt.Errorf("resolve LOD2 model mode for table %s model %s: %w",
-				tableName, instances[0].Model, err)
+			return nil, fmt.Errorf("resolve LOD%d model mode for table %s model %s: %w",
+				level.Level, tableName, instances[0].Model, err)
 		}
 
 		subset := make(map[string][]*GeoHashModel)
@@ -969,14 +968,35 @@ func loadLOD2ModelsBySource(cfg *config.Config, geoTable GeoTable, level tileLOD
 		case "skip":
 			continue
 		default:
-			return nil, fmt.Errorf("unsupported lod2ModelMode %q for table %s", mode, tableName)
+			return nil, fmt.Errorf("unsupported lod%dModelMode %q for table %s",
+				level.Level, mode, tableName)
 		}
 	}
 	return result, nil
 }
 
-func resolveLOD2ModelMode(lod config.TilesetSourceLODConfig, modelName string) (string, error) {
-	mode := strings.ToLower(strings.TrimSpace(lod.LOD2ModelMode))
+func resolveLODModelMode(lod config.TilesetSourceLODConfig, level int, modelName string) (string, error) {
+	var mode string
+	var prefixes []string
+	var unmatchedMode string
+	switch level {
+	case 0:
+		mode = lod.LOD0ModelMode
+		prefixes = lod.LOD0ModelPrefixes
+		unmatchedMode = lod.LOD0UnmatchedMode
+	case 1:
+		mode = lod.LOD1ModelMode
+		prefixes = lod.LOD1ModelPrefixes
+		unmatchedMode = lod.LOD1UnmatchedMode
+	case 2:
+		mode = lod.LOD2ModelMode
+		prefixes = lod.LOD2ModelPrefixes
+		unmatchedMode = lod.LOD2UnmatchedMode
+	default:
+		return "", fmt.Errorf("unsupported source LOD level %d", level)
+	}
+
+	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
 		return "local", nil
 	}
@@ -985,7 +1005,7 @@ func resolveLOD2ModelMode(lod config.TilesetSourceLODConfig, modelName string) (
 	}
 
 	normalizedModel := path.Clean(strings.ReplaceAll(strings.TrimSpace(modelName), "\\", "/"))
-	for _, configuredPrefix := range lod.LOD2ModelPrefixes {
+	for _, configuredPrefix := range prefixes {
 		prefix := strings.ReplaceAll(strings.TrimSpace(configuredPrefix), "\\", "/")
 		prefix = strings.TrimPrefix(prefix, "./")
 		if prefix != "" && strings.HasPrefix(normalizedModel, prefix) {
@@ -993,7 +1013,7 @@ func resolveLOD2ModelMode(lod config.TilesetSourceLODConfig, modelName string) (
 		}
 	}
 
-	unmatchedMode := strings.ToLower(strings.TrimSpace(lod.LOD2UnmatchedMode))
+	unmatchedMode = strings.ToLower(strings.TrimSpace(unmatchedMode))
 	if unmatchedMode == "" {
 		unmatchedMode = "local"
 	}
@@ -1001,7 +1021,7 @@ func resolveLOD2ModelMode(lod config.TilesetSourceLODConfig, modelName string) (
 	case "local", "reuse-lod3", "skip":
 		return unmatchedMode, nil
 	default:
-		return "", fmt.Errorf("unsupported lod2UnmatchedMode %q", unmatchedMode)
+		return "", fmt.Errorf("unsupported lod%dUnmatchedMode %q", level, unmatchedMode)
 	}
 }
 
