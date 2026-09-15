@@ -416,6 +416,29 @@ def add_primitive(
     }
 
 
+def wall_horizontal_segments(
+    length: float,
+    repeat_width: float,
+) -> list[tuple[float, float, float, float]]:
+    """Return wall distance/U ranges, using the texture's right third as fill."""
+    right_third_start = 2.0 / 3.0
+    if length < repeat_width:
+        return [(0.0, length, right_third_start, 1.0)]
+
+    full_repeats = math.floor(length / repeat_width)
+    full_width = full_repeats * repeat_width
+    remainder = length - full_width
+    epsilon = 1e-9
+    if remainder > epsilon and remainder < repeat_width * (2.0 / 3.0):
+        return [
+            (0.0, full_width, 0.0, float(full_repeats)),
+            (full_width, length, right_third_start, 1.0),
+        ]
+
+    # A sufficiently wide remainder keeps the original partial-repeat mapping.
+    return [(0.0, length, 0.0, length / repeat_width)]
+
+
 def create_glb(
     footprint: list[tuple[float, float]],
     height: float,
@@ -439,24 +462,33 @@ def create_glb(
         # Convert the local ENU coordinates to glTF's standard Y-up axes:
         # (east, north, up) -> (X, Y, Z) = (east, up, -north).
         normal = (dy / length, 0.0, dx / length)
-        first = len(wall_positions)
-        wall_positions.extend((
-            (start[0], 0.0, -start[1]),
-            (end[0], 0.0, -end[1]),
-            (end[0], height, -end[1]),
-            (start[0], height, -start[1]),
-        ))
-        wall_normals.extend((normal, normal, normal, normal))
-        # Every footprint edge owns separate vertices. Restart U at each edge
-        # so a facade texture never continues around a building corner.
-        u0, u1 = 0.0, length / wall_repeat_width
         # The facade image represents exactly one storey, so its vertical UV
         # range is the CSV storey count rather than a metre-based estimate.
         # glTF textures use an origin opposite to the source facade images;
         # assign the larger V to the bottom vertices to keep images upright.
         v1 = storeys
-        wall_uvs.extend(((u0, v1), (u1, v1), (u1, 0.0), (u0, 0.0)))
-        wall_indices.extend((first, first + 1, first + 2, first, first + 2, first + 3))
+        # Every footprint edge owns separate vertices. Normally U restarts at
+        # each corner. Narrow faces and narrow final remainders instead map the
+        # texture's right third, avoiding a squeezed partial facade pattern.
+        for distance0, distance1, u0, u1 in wall_horizontal_segments(
+            length, wall_repeat_width,
+        ):
+            ratio0, ratio1 = distance0 / length, distance1 / length
+            segment_start = (start[0] + dx * ratio0, start[1] + dy * ratio0)
+            segment_end = (start[0] + dx * ratio1, start[1] + dy * ratio1)
+            first = len(wall_positions)
+            wall_positions.extend((
+                (segment_start[0], 0.0, -segment_start[1]),
+                (segment_end[0], 0.0, -segment_end[1]),
+                (segment_end[0], height, -segment_end[1]),
+                (segment_start[0], height, -segment_start[1]),
+            ))
+            wall_normals.extend((normal, normal, normal, normal))
+            wall_uvs.extend(((u0, v1), (u1, v1), (u1, 0.0), (u0, 0.0)))
+            wall_indices.extend((
+                first, first + 1, first + 2,
+                first, first + 2, first + 3,
+            ))
 
     roof_positions = [(x, height, -y) for x, y in footprint]
     roof_normals = [(0.0, 1.0, 0.0)] * len(footprint)
