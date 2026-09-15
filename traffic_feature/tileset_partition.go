@@ -104,13 +104,17 @@ type TileSetModel struct {
 var AllTiles = []GeoTable{}
 
 const (
-	SignTileTableName      string = "hdtraffic_sign"
-	QbbTileTableName       string = "hdtraffic_qbb"
-	DeviceTileTableName    string = "hdtraffic_ene"
-	DeviceSfzTileTableName string = "hdtraffic_ene_sfz"
-	PoleTileTableName      string = "hdpole"
-	GantryTileTableName    string = "hdgantry"
-	BridgeTileTableName    string = "hdtraffic_bridges"
+	SignTileTableName               string = "hdtraffic_sign"
+	QbbTileTableName                string = "hdtraffic_qbb"
+	DeviceTileTableName             string = "hdtraffic_ene"
+	DeviceSfzTileTableName          string = "hdtraffic_ene_sfz"
+	PoleTileTableName               string = "hdpole"
+	GantryTileTableName             string = "hdgantry"
+	BridgeTileTableName             string = "hdtraffic_bridges"
+	RoadSideFacilityTileTableName   string = "hdroad_side_facility"
+	ServiceEquAreaTileTableName     string = "hdservice_equ_area"
+	RenderTollBuildingTileTableName string = "render_toll_building"
+	RenderUprightTileTableName      string = "render_upright_point"
 
 	MAX_GEOHASH_LEVEL int16 = 11
 	MIN_GEOHASH_LEVEL int16 = 3
@@ -538,19 +542,35 @@ func UpdatePartitionCount(db *gorm.DB, geoTables []string, tableName string, par
 	// 合并统计结果
 	countMap := make(map[string]map[string]int)
 	for _, table := range geoTables {
-		// 统计 device 表
 		var counts []GeoCount
-		result := db.Raw(fmt.Sprintf(`
-			SELECT ST_GeoHash(geom, ?) AS geohash,
-				   COUNT(*) AS count
-			FROM %s
-			WHERE ST_GeoHash(geom, ?) LIKE ?
-			  AND (model like '%%glb' or model like '%%gltf')
-			  AND ST_Intersects(ST_Transform(geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
-			GROUP BY geohash
-		`, table), append([]interface{}{level, level, parentHash + "%"}, bound.args()...)...).Scan(&counts)
-		if result.Error != nil {
-			return result.Error
+		hasColumnModel := db.Migrator().HasColumn(table, "model")
+		if !hasColumnModel {
+			// 统计表数据
+			result := db.Raw(fmt.Sprintf(`
+				SELECT ST_GeoHash(geom, ?) AS geohash,
+					   COUNT(*) AS count
+				FROM %s
+				WHERE ST_GeoHash(geom, ?) LIKE ?
+				  AND ST_Intersects(ST_Transform(geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+				GROUP BY geohash
+			`, table), append([]interface{}{level, level, parentHash + "%"}, bound.args()...)...).Scan(&counts)
+			if result.Error != nil {
+				return result.Error
+			}
+		} else {
+			// 统计表数据
+			result := db.Raw(fmt.Sprintf(`
+				SELECT ST_GeoHash(geom, ?) AS geohash,
+					   COUNT(*) AS count
+				FROM %s
+				WHERE ST_GeoHash(geom, ?) LIKE ?
+				  AND (model like '%%glb' or model like '%%gltf')
+				  AND ST_Intersects(ST_Transform(geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+				GROUP BY geohash
+			`, table), append([]interface{}{level, level, parentHash + "%"}, bound.args()...)...).Scan(&counts)
+			if result.Error != nil {
+				return result.Error
+			}
 		}
 
 		for _, d := range counts {

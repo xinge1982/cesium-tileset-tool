@@ -145,6 +145,9 @@ const tileModelRootDir = "tiles"
 // configuration instead of a separate hard-coded error table.
 const geohashParentGeometricErrorScale = 2.0
 
+var buildingDemMap = make(map[string]cesium.Vec3)
+var buildingDemLock = sync.RWMutex{}
+
 // tileModelRelativePath returns a URL-style relative path for a geohash tile.
 // A directory is added for every two geohash characters. Each directory keeps
 // the complete prefix accumulated so far, making its spatial prefix directly
@@ -1175,6 +1178,30 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 			for _, hashModels := range vs {
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
+		case RoadSideFacilityTileTableName:
+			vs, errQ := QueryRoadSideFacilityByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
+		case ServiceEquAreaTileTableName:
+			vs, errQ := QueryServiceEquAreaByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
+		case RenderTollBuildingTileTableName:
+			vs, errQ := QueryRenderTollBuildingsByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
 		default:
 			return nil, fmt.Errorf("Unsupport table %s", name)
 		}
@@ -1627,6 +1654,102 @@ func QueryBridgesByGeohashBBox(configName string, db *gorm.DB, geohash string, b
 	return models, err
 }
 
+// 查询分片的所有模型数据
+func QueryRoadSideFacilityByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
+	var devices []*GeoHashModel
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.id, dev.id::text as name, 'hdBuilding' as type, '%s' as table_name,
+			   (
+				   ST_XMin(Box3D(ST_Transform(dev.geom, 4326)))
+					   + ST_XMax(Box3D(ST_Transform(dev.geom, 4326)))
+				   ) / 2.0 as lng,
+			   (
+				   ST_YMin(Box3D(ST_Transform(dev.geom, 4326)))
+					   + ST_YMax(Box3D(ST_Transform(dev.geom, 4326)))
+				   ) / 2.0 as lat,
+			   (
+				   ST_ZMin(Box3D(ST_Transform(dev.geom, 4326)))
+					   + ST_ZMax(Box3D(ST_Transform(dev.geom, 4326)))
+				   ) / 2.0 as alt,
+			   id::text || '.glb' as model
+		FROM %s dev
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? 
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, RoadSideFacilityTileTableName, RoadSideFacilityTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+	if err != nil {
+		return nil, err
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	return models, err
+}
+
+// 查询分片的所有模型数据
+func QueryServiceEquAreaByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
+	var devices []*GeoHashModel
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.id, dev.id::text as name, 'hdBuilding' as type, '%s' as table_name,
+			   (
+				   ST_XMin(Box3D(ST_Transform(dev.geom, 4326)))
+					   + ST_XMax(Box3D(ST_Transform(dev.geom, 4326)))
+				   ) / 2.0 as lng,
+			   (
+				   ST_YMin(Box3D(ST_Transform(dev.geom, 4326)))
+					   + ST_YMax(Box3D(ST_Transform(dev.geom, 4326)))
+				   ) / 2.0 as lat,
+			   (
+				   ST_ZMin(Box3D(ST_Transform(dev.geom, 4326)))
+					   + ST_ZMax(Box3D(ST_Transform(dev.geom, 4326)))
+				   ) / 2.0 as alt,
+			   id::text || '.glb' as model
+		FROM %s dev
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ?
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, ServiceEquAreaTileTableName, ServiceEquAreaTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+	if err != nil {
+		return nil, err
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	return models, err
+}
+
+// 查询分片的所有模型数据
+func QueryRenderTollBuildingsByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
+	var devices []*GeoHashModel
+
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.id, dev.id::text as name, 'hdBuilding' as type, dev.model, '%s' as table_name,
+		       ST_X(ST_TRANSFORM(dev.geom, 4326)) AS lng,
+		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
+		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, height
+		FROM %s dev
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, RenderTollBuildingTileTableName, RenderTollBuildingTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+	if err != nil {
+		return nil, err
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	return models, err
+}
+
 type MinioBucket struct {
 	client     *minioconn.MinioConn
 	bucketName string
@@ -1708,6 +1831,8 @@ func getModelContentFromMinio(db *gorm.DB, cfgName string, devices []*GeoHashMod
 			case "hdDevice":
 				client, bucketName, prefix, errG = minioconn.GetMinioBaseGltfClient(code)
 			case "hdQbb":
+				client, bucketName, prefix, errG = minioconn.GetMinioBaseGltfClient(code)
+			case "hdBuilding":
 				client, bucketName, prefix, errG = minioconn.GetMinioBaseGltfClient(code)
 			default:
 				return nil, fmt.Errorf("生成模型设备类型错误: %s", device.Type)

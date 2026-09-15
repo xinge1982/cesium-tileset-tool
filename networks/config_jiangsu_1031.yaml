@@ -272,6 +272,55 @@ Tilesets:
               type: geom
               column: geom
 
+      - id: device-fwq
+        name: 服务区设备
+
+        lod:
+          lod2ModelMode: copy-lod3-by-prefix
+          lod2ModelPrefixes:
+            - cdz_
+            - jyj_
+          lod2UnmatchedMode: local
+
+        match:
+          operator: prefix
+          value: hdtraffic_ene_fwq
+
+        keyMapping:
+          operator: removePrefix
+          value: hdtraffic_ene_fwq.
+
+        table:
+          schema: public
+          name: hdtraffic_ene_fwq
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: false
+            submit: false
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+
       - id: gantry
         name: 门架
 
@@ -472,6 +521,9 @@ Tilesets:
     name: 道路面
     url: https://tileset.amap3d.online:48611/share/jiangsu/%E6%B1%9F%E8%8B%8F02/roadsurface/tileset.json
     type: road_surface
+    enabled: true
+    maintainable: true
+    order: 2
     lod:
       enabled: true
       lod0: { modelFolder: lod0, geometricError: 4.0 }
@@ -482,9 +534,7 @@ Tilesets:
         geometricError: 0
         localFirst: true
         minioFallback: true
-    enabled: true
-    maintainable: true
-    order: 6
+
     feature:
       idField: id
       sourceField: id
@@ -547,10 +597,185 @@ Tilesets:
       - ["modelForwardAxis","Y"]
       - ["modelUpAxis", "Z"]
 
-  其他设施:
+  buildings:
     name: 建筑
-    url: https://tileset.amap3d.online:48611/share/jiangsu/%E6%B1%9F%E8%8B%8F02/features/tileset.json
+    url: /tilesets/buildings/tileset.json
     type: buildings
+    enabled: true
+    maintainable: true
+    order: 3
+    partition:
+      table: t_tileset_partition_buildings
+    lod:
+      enabled: true
+
+      # 远距离：建筑投影、极简轮廓或整体占位盒
+      lod0:
+        modelFolder: lod0
+        geometricError: 60.0
+
+      # 中距离：按建筑整体生成的简化Box及外立面贴图
+      lod1:
+        modelFolder: lod1
+        geometricError: 18.0
+
+      # 近距离：平顶房屋、顶棚和简化附属结构
+      lod2:
+        modelFolder: lod2
+        geometricError: 4.0
+
+      # 最近距离：原始精细建筑模型
+      lod3:
+        modelFolder: lod3
+        geometricError: 0
+        localFirst: true
+        minioFallback: true
+
+    feature:
+      idField: id
+      sourceField: id
+    sources:
+      - id: toll
+        name: 收费站
+
+        lod:
+          lod2ModelMode: copy-lod3
+
+        match:
+          operator: prefix
+          value: hdroad_side_facility
+
+        keyMapping:
+          operator: removePrefix
+          value: hdroad_side_facility.
+
+        table:
+          schema: public
+          name: hdroad_side_facility
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: bz
+            label: 备注
+            list: true
+            search: true
+            editable: true
+            submit: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+      - id: render-toll
+        name: 收费站立柱
+
+        lod:
+          lod2ModelMode: copy-lod3
+
+        match:
+          operator: prefix
+          value: render_toll_building
+
+        keyMapping:
+          operator: removePrefix
+          value: render_toll_building.
+
+        table:
+          schema: public
+          name: render_toll_building
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: true
+            submit: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+      - id: service
+        name: 服务区
+
+        lod:
+          lod2ModelMode: copy-lod3
+
+        match:
+          operator: prefix
+          value: hdservice_equ_area
+
+        keyMapping:
+          operator: removePrefix
+          value: hdservice_equ_area.
+
+        table:
+          schema: public
+          name: hdservice_equ_area
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: bz
+            label: 备注
+            list: true
+            search: true
+            editable: true
+            submit: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+    boundingVolume:
+      scale: 4.0
+      minimumRadius: 50.0
+      disableBoundingVolume: true
+
+  其他设施:
+    name: 其他设施
+    url: https://tileset.amap3d.online:48611/share/jiangsu/%E6%B1%9F%E8%8B%8F02/features/tileset.json
+    type: other-features
     lod:
       enabled: true
       lod0: { modelFolder: lod0, geometricError: 4.0 }
@@ -576,15 +801,15 @@ Tilesets:
 
         match:
           operator: prefix
-          value: hdtoll_stations
+          value: hdroad_side_facility
 
         keyMapping:
           operator: removePrefix
-          value: hdtoll_stations.
+          value: hdroad_side_facility.
 
         table:
           schema: public
-          name: hdtoll_stations
+          name: hdroad_side_facility
           primaryKey: id
           geometryField: geom
 
@@ -596,12 +821,12 @@ Tilesets:
             editable: false
             submit: true
 
-          - name: model
-            label: 模型
+          - name: bz
+            label: 备注
             list: true
             search: true
-            editable: false
-            submit: false
+            editable: true
+            submit: true
 
           - name: geom
             label: 位置
