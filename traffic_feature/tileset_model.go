@@ -1728,7 +1728,7 @@ func QueryServiceEquAreaByGeohashBBox(configName string, db *gorm.DB, geohash st
 				   ) / 2.0 as alt,
 			   id::text || '.glb' as model
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ?
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? AND dev.type not in ('2','6')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, ServiceEquAreaTileTableName, ServiceEquAreaTileTableName),
 		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
@@ -1888,6 +1888,15 @@ func getModelContentFromMinio(db *gorm.DB, cfgName string, devices []*GeoHashMod
 				log.Errorf("Failed to read object content: %s/%s %v", bucketName, objectName, errO)
 			}
 			_ = object.Close()
+		}
+
+		if len(content) == 0 {
+			log.Errorf(
+				"LOD3 model is empty: %s/%s",
+				bucketName,
+				objectName,
+			)
+			continue
 		}
 
 		contentType := detectGltfFormat(content)

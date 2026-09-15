@@ -639,6 +639,8 @@ Tilesets:
         name: 收费站
 
         lod:
+          lod0ModelMode: copy-lod3
+          lod1ModelMode: copy-lod3
           lod2ModelMode: copy-lod3
 
         match:
@@ -683,6 +685,8 @@ Tilesets:
         name: 收费站立柱
 
         lod:
+          lod0ModelMode: copy-lod3
+          lod1ModelMode: copy-lod3
           lod2ModelMode: copy-lod3
 
         match:
@@ -727,6 +731,8 @@ Tilesets:
         name: 服务区
 
         lod:
+          lod0ModelMode: copy-lod3
+          lod1ModelMode: copy-lod3
           lod2ModelMode: copy-lod3
 
         match:
