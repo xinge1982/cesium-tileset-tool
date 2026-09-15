@@ -4,7 +4,8 @@
 Run with Blender, for example:
 
     blender --background --python csv_toll_station_3d_text.py -- \
-        stations.csv --output output --font C:/Windows/Fonts/simhei.ttf
+        stations.csv --output output --height 3.0 \
+        --font C:/Windows/Fonts/simhei.ttf
 
 The model origin is the bottom center of the text bounding box. Blender uses
 Z-up while editing; the glTF exporter performs the standard glTF Y-up axis
@@ -51,6 +52,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("input_csv", type=Path)
     parser.add_argument("--output", "-o", type=Path, required=True)
     parser.add_argument(
+        "--height", type=float, required=True,
+        help="uniform text model height in metres",
+    )
+    parser.add_argument(
         "--font", type=Path,
         help="Chinese font file; defaults to a detected SimHei/Noto Sans CJK font",
     )
@@ -80,7 +85,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--id-field", default="id")
     parser.add_argument("--name-field", default="name")
-    parser.add_argument("--height-field", default="height")
     parser.add_argument("--angle-field", default="angle")
     parser.add_argument("--geometry-field", default="WKT")
     parser.add_argument("--overwrite", action="store_true")
@@ -264,8 +268,12 @@ def main() -> int:
     if bpy is None:
         print("error: run this script with Blender's Python", file=sys.stderr)
         return 2
-    if args.limit < 0 or args.depth_ratio <= 0 or args.bevel_ratio < 0:
-        print("error: limit/bevel must be non-negative and depth must be positive", file=sys.stderr)
+    if (args.limit < 0 or args.depth_ratio <= 0 or args.bevel_ratio < 0
+            or not math.isfinite(args.height) or args.height <= 0):
+        print(
+            "error: limit/bevel must be non-negative and depth/height must be positive",
+            file=sys.stderr,
+        )
         return 2
     if not 0.0 <= args.metallic <= 1.0 or not 0.0 <= args.roughness <= 1.0:
         print("error: metallic and roughness must be within 0..1", file=sys.stderr)
@@ -299,8 +307,7 @@ def main() -> int:
     with input_path.open("r", encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
         required = {
-            args.id_field, args.name_field, args.height_field,
-            args.angle_field, args.geometry_field,
+            args.id_field, args.name_field, args.angle_field, args.geometry_field,
         }
         missing = required.difference(reader.fieldnames or [])
         if missing:
@@ -321,10 +328,7 @@ def main() -> int:
                     raise ValueError("id is empty")
                 if not name:
                     raise ValueError("name is empty")
-                height = float((row.get(args.height_field) or "").strip())
                 angle = float((row.get(args.angle_field) or "").strip())
-                if not math.isfinite(height) or height <= 0:
-                    raise ValueError("height must be a positive finite number")
                 if not math.isfinite(angle):
                     raise ValueError("angle must be finite")
                 longitude, latitude, altitude = parse_point_wkt(
@@ -332,7 +336,7 @@ def main() -> int:
                 )
                 text = output_text(name, args.text_suffix)
                 create_text_model(
-                    text, height, angle, font, destination, args, color,
+                    text, args.height, angle, font, destination, args, color,
                 )
                 rows.append({
                     "id": identifier,
@@ -342,7 +346,7 @@ def main() -> int:
                     "longitude": f"{longitude:.12f}",
                     "latitude": f"{latitude:.12f}",
                     "altitude": f"{altitude:.6f}",
-                    "height": f"{height:.6f}",
+                    "height": f"{args.height:.6f}",
                     "sourceAngle": f"{angle:.10f}",
                     "angleBaked": str(args.bake_angle).lower(),
                     "recommendedObjAngle": "0" if args.bake_angle else f"{angle:.10f}",
