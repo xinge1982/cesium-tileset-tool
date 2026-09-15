@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Create textured flat-roof building GLBs from POLYGON Z CSV rows.
 
-The generated model origin is the center of the footprint's bottom bounding
-box. GLB data follows glTF's Y-up convention, so Blender's glTF importer shows
+The generated model origin is the center of the source polygon's 3D bounding
+box: longitude/latitude/Z are each the midpoint of their original min/max.
+GLB data follows glTF's Y-up convention, so Blender's glTF importer shows
 the building rising along Blender +Z. The single-storey facade texture repeats
 vertically exactly <s_height> times and restarts horizontally at every facade
 corner. A placement CSV records the WGS84 anchor used by every GLB.
@@ -130,12 +131,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--geometry-field", default="WKT")
     parser.add_argument(
-        "--base-altitude",
-        choices=("minimum", "average", "first"),
-        default="minimum",
-        help="WKT Z used by the placement anchor (default: minimum)",
-    )
-    parser.add_argument(
         "--wall-repeat-width",
         type=float,
         default=5.0,
@@ -227,12 +222,7 @@ def parse_polygon_z(wkt: str) -> list[tuple[float, float, float]]:
 def local_footprint(
     points: list[tuple[float, float, float]],
 ) -> tuple[list[tuple[float, float]], float, float]:
-    minimum_lon = min(point[0] for point in points)
-    maximum_lon = max(point[0] for point in points)
-    minimum_lat = min(point[1] for point in points)
-    maximum_lat = max(point[1] for point in points)
-    anchor_lon = (minimum_lon + maximum_lon) * 0.5
-    anchor_lat = (minimum_lat + maximum_lat) * 0.5
+    anchor_lon, anchor_lat, _ = source_bbox_center(points)
     latitude = math.radians(anchor_lat)
     sin_latitude = math.sin(latitude)
     radius_n = EARTH_A / math.sqrt(1.0 - EARTH_E2 * sin_latitude ** 2)
@@ -527,15 +517,15 @@ def safe_filename(value: str) -> str:
     return value or "unknown"
 
 
-def selected_altitude(
-    points: list[tuple[float, float, float]], mode: str,
-) -> float:
-    altitudes = [point[2] for point in points]
-    if mode == "minimum":
-        return min(altitudes)
-    if mode == "average":
-        return sum(altitudes) / len(altitudes)
-    return altitudes[0]
+def source_bbox_center(
+    points: list[tuple[float, float, float]],
+) -> tuple[float, float, float]:
+    """Return lon, lat and Z at the source polygon's 3D bbox center."""
+    return tuple(
+        (min(point[axis] for point in points)
+         + max(point[axis] for point in points)) * 0.5
+        for axis in range(3)
+    )
 
 
 def main() -> int:
@@ -601,7 +591,7 @@ def main() -> int:
                     )
                 points = parse_polygon_z(row.get(args.geometry_field) or "")
                 footprint, longitude, latitude = local_footprint(points)
-                altitude = selected_altitude(points, args.base_altitude)
+                _, _, altitude = source_bbox_center(points)
                 create_glb(
                     footprint, height, storeys, style, destination,
                     args.wall_repeat_width, args.roof_repeat_size,
@@ -615,7 +605,7 @@ def main() -> int:
                     "altitude": f"{altitude:.6f}",
                     "height": f"{height:.6f}",
                     "storeys": f"{storeys:g}",
-                    "origin": "bottom-bounding-box-center",
+                    "origin": "source-polygon-3d-bounding-box-center",
                     "sourceRow": row_number,
                 })
                 generated += 1

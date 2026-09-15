@@ -4,7 +4,8 @@
 The canopy top copies the source polygon elevations plus the row's height.
 The bottom is offset downward by --thickness. GLB uses standard Y-up axes, so
 Blender imports the models with Z pointing upward. Each model is named
-<id>.glb and its origin is the 3D center of the bottom surface bounding box.
+<id>.glb and its origin is the center of the source polygon's 3D bounding box:
+longitude/latitude/Z are each the midpoint of their original min/max.
 
 Example:
 
@@ -38,6 +39,7 @@ from csv_polygon_to_flat_buildings import (
     parse_polygon_z,
     safe_filename,
     signed_area,
+    source_bbox_center,
     triangulate,
     vector_min_max,
 )
@@ -105,12 +107,7 @@ def local_surfaces(
     float,
     float,
 ]:
-    minimum_lon = min(point[0] for point in points)
-    maximum_lon = max(point[0] for point in points)
-    minimum_lat = min(point[1] for point in points)
-    maximum_lat = max(point[1] for point in points)
-    anchor_lon = (minimum_lon + maximum_lon) * 0.5
-    anchor_lat = (minimum_lat + maximum_lat) * 0.5
+    anchor_lon, anchor_lat, anchor_altitude = source_bbox_center(points)
 
     latitude = math.radians(anchor_lat)
     sin_latitude = math.sin(latitude)
@@ -130,10 +127,6 @@ def local_surfaces(
         points = list(reversed(points))
         horizontal.reverse()
 
-    bottom_altitudes = [point[2] + height - thickness for point in points]
-    anchor_altitude = (
-        min(bottom_altitudes) + max(bottom_altitudes)
-    ) * 0.5
     top = [
         (xy[0], xy[1], point[2] + height - anchor_altitude)
         for xy, point in zip(horizontal, points)
@@ -453,7 +446,7 @@ def main() -> int:
                     "altitude": f"{altitude:.6f}",
                     "height": f"{height:.6f}",
                     "thickness": f"{args.thickness:.6f}",
-                    "origin": "bottom-bounding-box-center",
+                    "origin": "source-polygon-3d-bounding-box-center",
                     "sourceRow": row_number,
                 })
                 generated += 1
