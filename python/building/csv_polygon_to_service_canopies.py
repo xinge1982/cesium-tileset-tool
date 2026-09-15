@@ -96,6 +96,41 @@ def selected_types(value: str) -> set[str]:
     return result
 
 
+def aligned_surface_uvs(
+    footprint: list[tuple[float, float]],
+    repeat_size: float,
+) -> list[tuple[float, float]]:
+    """Align the surface texture grid with the polygon's longest edge."""
+    longest_start: tuple[float, float] | None = None
+    longest_dx = longest_dy = longest_length = 0.0
+    for index, start in enumerate(footprint):
+        end = footprint[(index + 1) % len(footprint)]
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        length = math.hypot(dx, dy)
+        # Keep the first edge when lengths are effectively equal. This avoids
+        # UV direction flips on opposite sides of a rectangular footprint.
+        if length > longest_length + 1e-9:
+            longest_start = start
+            longest_dx, longest_dy, longest_length = dx, dy, length
+
+    if longest_start is None or longest_length <= 1e-6:
+        raise ValueError("polygon has no usable edge for surface UV alignment")
+
+    # U follows the longest boundary edge. V is perpendicular to it, so the
+    # texture grid has one boundary exactly aligned with the canopy outline.
+    u_axis = (longest_dx / longest_length, longest_dy / longest_length)
+    v_axis = (-u_axis[1], u_axis[0])
+    return [
+        (
+            ((point[0] - longest_start[0]) * u_axis[0]
+             + (point[1] - longest_start[1]) * u_axis[1]) / repeat_size,
+            ((point[0] - longest_start[0]) * v_axis[0]
+             + (point[1] - longest_start[1]) * v_axis[1]) / repeat_size,
+        )
+        for point in footprint
+    ]
+
+
 def local_surfaces(
     points: list[tuple[float, float, float]],
     height: float,
@@ -244,10 +279,9 @@ def create_canopy_glb(
     bottom_positions = [to_gltf(point) for point in bottom_enu]
     top_normals = [to_gltf(value) for value in surface_normals(top_enu, triangles, True)]
     bottom_normals = [to_gltf(value) for value in surface_normals(bottom_enu, triangles, False)]
-    surface_uvs = [
-        (point[0] / surface_repeat_size, point[1] / surface_repeat_size)
-        for point in top_enu
-    ]
+    # Use one aligned UV set for both faces so top and bottom textures follow
+    # the same dominant canopy edge instead of the global east/north axes.
+    surface_uvs = aligned_surface_uvs(footprint, surface_repeat_size)
     top_indices = [value for triangle in triangles for value in triangle]
     bottom_indices = [
         value
