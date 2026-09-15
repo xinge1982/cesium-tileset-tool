@@ -278,7 +278,8 @@ def create_canopy_glb(
         side_normals.extend((normal, normal, normal, normal))
         u0 = distance_u / side_repeat_width
         u1 = (distance_u + length) / side_repeat_width
-        side_uvs.extend(((u0, 0.0), (u1, 0.0), (u1, 1.0), (u0, 1.0)))
+        # Flip V so the source side image is upright on the vertical face.
+        side_uvs.extend(((u0, 1.0), (u1, 1.0), (u1, 0.0), (u0, 0.0)))
         side_indices.extend((
             first, first + 1, first + 2,
             first, first + 2, first + 3,

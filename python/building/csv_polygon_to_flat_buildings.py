@@ -440,8 +440,10 @@ def create_glb(
         u0, u1 = 0.0, length / wall_repeat_width
         # The facade image represents exactly one storey, so its vertical UV
         # range is the CSV storey count rather than a metre-based estimate.
+        # glTF textures use an origin opposite to the source facade images;
+        # assign the larger V to the bottom vertices to keep images upright.
         v1 = storeys
-        wall_uvs.extend(((u0, 0.0), (u1, 0.0), (u1, v1), (u0, v1)))
+        wall_uvs.extend(((u0, v1), (u1, v1), (u1, 0.0), (u0, 0.0)))
         wall_indices.extend((first, first + 1, first + 2, first, first + 2, first + 3))
 
     roof_positions = [(x, height, -y) for x, y in footprint]
