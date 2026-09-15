@@ -25,10 +25,11 @@ from typing import Any
 
 try:
     import bpy
-    from mathutils import Matrix
+    from mathutils import Matrix, Vector
 except ImportError:  # Give a useful message when launched with normal Python.
     bpy = None
     Matrix = None
+    Vector = None
 
 
 POINT_WKT_RE = re.compile(
@@ -176,7 +177,9 @@ def create_material(
 
 
 def evaluated_bounds(obj: Any) -> tuple[list[float], list[float]]:
-    corners = [obj.matrix_world @ corner for corner in obj.bound_box]
+    # Blender 5 exposes bound_box corners as bpy_prop_array. Matrix
+    # multiplication only accepts mathutils.Vector (or compatible values).
+    corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
     minimum = [min(corner[axis] for corner in corners) for axis in range(3)]
     maximum = [max(corner[axis] for corner in corners) for axis in range(3)]
     return minimum, maximum
