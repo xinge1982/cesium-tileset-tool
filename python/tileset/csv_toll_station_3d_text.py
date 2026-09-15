@@ -5,13 +5,15 @@ Run with Blender, for example:
 
     blender --background --python csv_toll_station_3d_text.py -- \
         stations.csv --output output --height 3.0 \
+        --height-offset 1.5 --letter-spacing 1.1 \
         --font C:/Windows/Fonts/simhei.ttf
 
-The model origin is the bottom center of the text bounding box. Blender uses
-Z-up while editing; the glTF exporter performs the standard glTF Y-up axis
-conversion. Before any optional heading is baked, the text front faces local
--Y and local +Y is its north-reference axis. By default CSV angle is only
-recorded in the placement manifest for the tileset instance transform.
+The model origin stays at the CSV placement point; the text's horizontal center
+is above it and its bottom is raised by --height-offset. Blender uses Z-up while
+editing; the glTF exporter performs the standard glTF Y-up axis conversion.
+Before any optional heading is baked, the text front faces local -Y and local
++Y is its north-reference axis. By default CSV angle is only recorded in the
+placement manifest for the tileset instance transform.
 """
 
 from __future__ import annotations
@@ -56,6 +58,10 @@ def parse_args() -> argparse.Namespace:
         help="uniform text model height in metres",
     )
     parser.add_argument(
+        "--height-offset", type=float, default=0.0,
+        help="raise the entire text above its CSV placement point in metres",
+    )
+    parser.add_argument(
         "--font", type=Path,
         help="Chinese font file; defaults to a detected SimHei/Noto Sans CJK font",
     )
@@ -72,7 +78,8 @@ def parse_args() -> argparse.Namespace:
         help="edge bevel depth relative to text height (default: 0.008)",
     )
     parser.add_argument(
-        "--character-spacing", type=float, default=1.0,
+        "--letter-spacing", "--character-spacing",
+        dest="letter_spacing", type=float, default=1.0,
         help="Blender text character spacing multiplier (default: 1.0)",
     )
     parser.add_argument("--color", default="#B88716", help="material color #RRGGBB")
@@ -205,7 +212,7 @@ def create_text_model(
     curve.align_x = "CENTER"
     curve.align_y = "BOTTOM_BASELINE"
     curve.size = 1.0
-    curve.space_character = args.character_spacing
+    curve.space_character = args.letter_spacing
     curve.extrude = args.depth_ratio
     curve.bevel_depth = args.bevel_ratio
     curve.bevel_resolution = 2
@@ -233,11 +240,14 @@ def create_text_model(
     obj.scale = (scale, scale, scale)
     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-    # Put the local origin at the bottom center of the final text bounding box.
+    # Keep the placement origin below the horizontal center of the text and
+    # raise its bottom by the configured metre offset.
     minimum, maximum = evaluated_bounds(obj)
     center_x = (minimum[0] + maximum[0]) * 0.5
     center_y = (minimum[1] + maximum[1]) * 0.5
-    obj.data.transform(Matrix.Translation((-center_x, -center_y, -minimum[2])))
+    obj.data.transform(Matrix.Translation((
+        -center_x, -center_y, -minimum[2] + args.height_offset,
+    )))
 
     if args.bake_angle:
         # Bearings are clockwise from north (+Y), opposite Blender's positive Z rotation.
@@ -269,7 +279,8 @@ def main() -> int:
         print("error: run this script with Blender's Python", file=sys.stderr)
         return 2
     if (args.limit < 0 or args.depth_ratio <= 0 or args.bevel_ratio < 0
-            or not math.isfinite(args.height) or args.height <= 0):
+            or not math.isfinite(args.height) or args.height <= 0
+            or not math.isfinite(args.height_offset)):
         print(
             "error: limit/bevel must be non-negative and depth/height must be positive",
             file=sys.stderr,
@@ -278,7 +289,7 @@ def main() -> int:
     if not 0.0 <= args.metallic <= 1.0 or not 0.0 <= args.roughness <= 1.0:
         print("error: metallic and roughness must be within 0..1", file=sys.stderr)
         return 2
-    if args.emission_strength < 0 or args.character_spacing <= 0:
+    if args.emission_strength < 0 or args.letter_spacing <= 0:
         print("error: emission must be non-negative and spacing must be positive", file=sys.stderr)
         return 2
 
@@ -298,7 +309,8 @@ def main() -> int:
     manifest_path = output_dir / f"{input_path.stem}_text_placements.csv"
     fields = [
         "id", "name", "text", "model", "longitude", "latitude", "altitude",
-        "height", "sourceAngle", "angleBaked", "recommendedObjAngle",
+        "height", "heightOffset", "letterSpacing", "sourceAngle",
+        "angleBaked", "recommendedObjAngle",
         "frontDirection", "northReferenceAxis", "origin", "sourceRow",
     ]
     rows: list[dict[str, Any]] = []
@@ -347,12 +359,14 @@ def main() -> int:
                     "latitude": f"{latitude:.12f}",
                     "altitude": f"{altitude:.6f}",
                     "height": f"{args.height:.6f}",
+                    "heightOffset": f"{args.height_offset:.6f}",
+                    "letterSpacing": f"{args.letter_spacing:g}",
                     "sourceAngle": f"{angle:.10f}",
                     "angleBaked": str(args.bake_angle).lower(),
                     "recommendedObjAngle": "0" if args.bake_angle else f"{angle:.10f}",
                     "frontDirection": "-Y before optional baked angle",
                     "northReferenceAxis": "+Y",
-                    "origin": "text-bottom-bounding-box-center",
+                    "origin": "placement-point; text-bottom-at-heightOffset",
                     "sourceRow": row_number,
                 })
                 generated += 1
