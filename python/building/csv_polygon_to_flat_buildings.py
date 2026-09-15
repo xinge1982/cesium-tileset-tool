@@ -421,9 +421,9 @@ def wall_horizontal_segments(
     repeat_width: float,
 ) -> list[tuple[float, float, float, float]]:
     """Return wall distance/U ranges, using the texture's right quarter as fill."""
-    right_quarter_start = 3.0 / 4.0
+    right_percent_start = 4.0 / 5.0
     if length < repeat_width:
-        return [(0.0, length, right_quarter_start, 1.0)]
+        return [(0.0, length, right_percent_start, 1.0)]
 
     full_repeats = math.floor(length / repeat_width)
     full_width = full_repeats * repeat_width
@@ -432,7 +432,7 @@ def wall_horizontal_segments(
     if remainder > epsilon and remainder < repeat_width * (2.0 / 3.0):
         return [
             (0.0, full_width, 0.0, float(full_repeats)),
-            (full_width, length, right_quarter_start, 1.0),
+            (full_width, length, right_percent_start, 1.0),
         ]
 
     # A sufficiently wide remainder keeps the original partial-repeat mapping.
