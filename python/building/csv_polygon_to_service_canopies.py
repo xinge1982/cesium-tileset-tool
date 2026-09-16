@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Generate textured service-area canopy GLBs from POLYGON Z CSV rows.
 
-The canopy top copies the source polygon elevations plus the row's height.
-The bottom is offset downward by --thickness. GLB uses standard Y-up axes, so
-Blender imports the models with Z pointing upward. Each model is named
-<id>.glb and its origin is the center of the source polygon's 3D bounding box:
-longitude/latitude/Z are each the midpoint of their original min/max.
+The canopy top preserves every source polygon vertex elevation, including a
+sloped or curved profile, and is raised vertically by the row's height. Each
+bottom vertex is generated directly below its matching top vertex by
+--thickness, so the original profile is retained while the canopy thickness is
+strictly vertical. GLB uses standard Y-up axes, so Blender imports the models
+with Z pointing upward. Each model is named <id>.glb and its origin is the
+center of the source polygon's 3D bounding box: longitude/latitude/Z are each
+the midpoint of their original min/max.
 
 Example:
 
@@ -176,13 +179,16 @@ def local_surfaces(
         points = list(reversed(points))
         horizontal.reverse()
 
+    # Preserve the source Z profile. The top is translated upward without
+    # flattening it; deriving every bottom vertex from its matching top vertex
+    # keeps the shell thickness aligned strictly with the local Z axis.
     top = [
         (xy[0], xy[1], point[2] + height - anchor_altitude)
         for xy, point in zip(horizontal, points)
     ]
     bottom = [
-        (xy[0], xy[1], point[2] + height - thickness - anchor_altitude)
-        for xy, point in zip(horizontal, points)
+        (point[0], point[1], point[2] - thickness)
+        for point in top
     ]
     return top, bottom, anchor_lon, anchor_lat, anchor_altitude
 
