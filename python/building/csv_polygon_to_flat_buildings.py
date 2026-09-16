@@ -13,7 +13,8 @@ Simple configuration (the same textures for all selected types):
     python csv_polygon_to_flat_buildings.py buildings.csv -o output \
         --building-types 1,3,4 \
         --wall-texture textures/wall.jpg \
-        --roof-texture textures/roof.jpg
+        --roof-texture textures/roof.jpg \
+        --opacity 0.5
 
 Per-type configuration:
 
@@ -155,6 +156,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--texture-quality", type=int, default=85,
         help="JPEG quality from 1 to 100 (default: 85)",
+    )
+    parser.add_argument(
+        "--opacity", type=float, default=1.0,
+        help="shared wall/roof material opacity from 0 to 1 (default: 1)",
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
@@ -432,6 +437,7 @@ def append_textured_materials(
     max_size: int,
     output_format: str,
     quality: int,
+    opacity: float = 1.0,
 ) -> None:
     """Append materials while embedding identical image content only once."""
     embedded: dict[tuple[str, bytes], int] = {}
@@ -452,15 +458,22 @@ def append_textured_materials(
             texture_index = len(document["textures"])
             document["textures"].append({"sampler": 0, "source": image_index})
             embedded[key] = texture_index
-        document["materials"].append({
+        material: dict[str, Any] = {
             "name": f"{destination.stem}_{role}",
             "pbrMetallicRoughness": {
                 "baseColorTexture": {"index": texture_index},
+                "baseColorFactor": [1.0, 1.0, 1.0, opacity],
                 "metallicFactor": 0.0,
                 "roughnessFactor": 1.0,
             },
-            "doubleSided": False,
-        })
+            "doubleSided": opacity < 1.0,
+        }
+        if opacity < 1.0:
+            # BLEND combines this opacity with the texture's own alpha channel.
+            # Double-sided rendering keeps the transparent shell visible when
+            # it is viewed through the building.
+            material["alphaMode"] = "BLEND"
+        document["materials"].append(material)
 
 
 def append_accessor(
@@ -567,6 +580,7 @@ def create_glb(
     texture_max_size: int,
     texture_format: str,
     texture_quality: int,
+    opacity: float,
 ) -> None:
     roof_triangles = triangulate(footprint)
     wall_positions: list[tuple[float, float, float]] = []
@@ -643,6 +657,7 @@ def create_glb(
         document, builder, destination,
         (("wall", style.wall_texture), ("roof", style.roof_texture)),
         texture_max_size, texture_format, texture_quality,
+        opacity,
     )
 
     document["bufferViews"] = builder.json_views()
@@ -688,9 +703,11 @@ def main() -> int:
         args.wall_repeat_width,
         args.roof_repeat_size,
     ) <= 0 or args.limit < 0 or args.texture_max_size < 0 \
+            or not math.isfinite(args.opacity) or not 0.0 <= args.opacity <= 1.0 \
             or not 1 <= args.texture_quality <= 100:
         print(
-            "error: repeat sizes/quality must be positive and limits non-negative",
+            "error: repeat sizes/quality must be positive, opacity within 0..1, "
+            "and limits non-negative",
             file=sys.stderr,
         )
         return 2
@@ -705,7 +722,7 @@ def main() -> int:
     manifest_path = output_dir / f"{input_path.stem}_placements.csv"
     manifest_fields = [
         "id", "type", "model", "longitude", "latitude", "altitude",
-        "height", "storeys", "origin", "sourceRow",
+        "height", "storeys", "opacity", "origin", "sourceRow",
     ]
     generated = skipped = ignored = failed = 0
     manifest_rows: list[dict[str, Any]] = []
@@ -745,7 +762,7 @@ def main() -> int:
                     footprint, height, storeys, style, destination,
                     args.wall_repeat_width, args.roof_repeat_size,
                     args.texture_max_size, args.texture_format,
-                    args.texture_quality,
+                    args.texture_quality, args.opacity,
                 )
                 manifest_rows.append({
                     "id": identifier,
@@ -756,6 +773,7 @@ def main() -> int:
                     "altitude": f"{altitude:.6f}",
                     "height": f"{height:.6f}",
                     "storeys": f"{storeys:g}",
+                    "opacity": f"{args.opacity:g}",
                     "origin": "source-polygon-3d-bounding-box-center",
                     "sourceRow": row_number,
                 })
