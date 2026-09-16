@@ -13,6 +13,7 @@ type TilesetMenuItem struct {
 	Label             string                       `json:"label"`
 	Type              string                       `json:"type,omitempty"`
 	Url               string                       `json:"url,omitempty"`
+	Enabled           bool                         `json:"enabled"`
 	Options           [][]string                   `json:"options,omitempty"`
 	Children          []TilesetSourceMenuItem      `json:"children"`
 	IdField           string                       `json:"idField,omitempty"`
@@ -52,10 +53,6 @@ func (service *TilesetSourceSearchService) GetTilesetMenu() []TilesetMenuItem {
 	)
 
 	for key, tileset := range service.tilesets {
-		// 不返回已经禁用的 Tileset。
-		if !tileset.Enabled {
-			continue
-		}
 
 		// 数据维护菜单只需要返回可维护的 Tileset。
 		if !tileset.Maintainable {
@@ -140,6 +137,7 @@ func (service *TilesetSourceSearchService) GetTilesetMenu() []TilesetMenuItem {
 			TilesetMenuItem{
 				Value:          current.key,
 				Url:            current.tileset.URL,
+				Enabled:        current.tileset.Enabled,
 				Options:        current.tileset.Options,
 				BoundingVolume: current.tileset.BoundingVolume,
 				Label:          label,

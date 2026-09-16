@@ -826,6 +826,7 @@ Tilesets:
             storage:
               type: geom
               column: geom
+
       - id: service
         name: 服务区
 
@@ -923,6 +924,90 @@ Tilesets:
       minimumRadius: 50.0
       disableBoundingVolume: true
 
+  areas:
+    name: 范围标识
+    url: /tilesets/areas/tileset.json
+    type: areas
+    lod:
+      enabled: true
+
+      # 远距离：桥面水平投影 + 桥塔前后贴片
+      lod0:
+        modelFolder: lod0
+        geometricError: 120.0
+
+      # 中远距离：桥面、桥墩、桥塔等主体简化结构
+      lod1:
+        modelFolder: lod1
+        geometricError: 35.0
+
+      # 近距离：主要结构和附属设施
+      lod2:
+        modelFolder: lod2
+        geometricError: 7.0
+
+      # 最近距离：完整精细模型
+      lod3:
+        modelFolder: lod3
+        geometricError: 0
+        localFirst: true
+        minioFallback: true
+    enabled: true
+    maintainable: true
+    order: 4
+    partition:
+      table: t_tileset_partition_areas
+    feature:
+      idField: id
+      sourceField: id
+    sources:
+      - id: service_area
+        name:  服务区范围
+
+        lod:
+          lod0ModelMode: local
+          lod1ModelMode: local
+          lod2ModelMode: local
+
+        match:
+          operator: prefix
+          value: hdservice_area
+
+        keyMapping:
+          operator: removePrefix
+          value: hdservice_area.
+
+        table:
+          schema: public
+          name: hdservice_area
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: fid
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: name
+            label: 名称
+            list: true
+            search: true
+            editable: true
+            submit: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+
   其他设施:
     name: 其他设施
     url: https://tileset.amap3d.online:48611/share/jiangsu/%E6%B1%9F%E8%8B%8F02/features/tileset.json
@@ -937,7 +1022,7 @@ Tilesets:
         geometricError: 0
         localFirst: true
         minioFallback: true
-    enabled: true
+    enabled: false
     maintainable: true
     order: 6
     feature:

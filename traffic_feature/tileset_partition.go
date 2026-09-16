@@ -118,6 +118,7 @@ const (
 	RenderUprightTileTableName      string = "render_upright_point"
 	TollNameTileTableName           string = "toll_name"
 	LittlePolesTileTableName        string = "aa_xxb_model"
+	ServiceAreasTileTableName       string = "hdservice_area"
 
 	MAX_GEOHASH_LEVEL int16 = 11
 	MIN_GEOHASH_LEVEL int16 = 3

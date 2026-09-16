@@ -1254,6 +1254,14 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 			for _, hashModels := range vs {
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
+		case ServiceAreasTileTableName:
+			vs, errQ := QueryServiceAreasByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
 		default:
 			return nil, fmt.Errorf("Unsupport table %s", name)
 		}
@@ -1795,6 +1803,41 @@ func QueryServiceEquAreaByGeohashBBox(configName string, db *gorm.DB, geohash st
 		WHERE ST_GeoHash(dev.geom, ?) LIKE ? AND dev.type not in ('2','6')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, ServiceEquAreaTileTableName, ServiceEquAreaTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+	if err != nil {
+		return nil, err
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	return models, err
+}
+
+// 查询分片的所有模型数据
+func QueryServiceAreasByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
+	var devices []*GeoHashModel
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.fid as id, dev.fid::text as name, 'hdBuilding' as type, '%s' as table_name,
+			   (
+				   ST_XMin(Box3D(ST_Transform(dev.geom, 4326)))
+					   + ST_XMax(Box3D(ST_Transform(dev.geom, 4326)))
+				   ) / 2.0 as lng,
+			   (
+				   ST_YMin(Box3D(ST_Transform(dev.geom, 4326)))
+					   + ST_YMax(Box3D(ST_Transform(dev.geom, 4326)))
+				   ) / 2.0 as lat,
+			   (
+				   ST_ZMin(Box3D(ST_Transform(dev.geom, 4326)))
+					   + ST_ZMax(Box3D(ST_Transform(dev.geom, 4326)))
+				   ) / 2.0 as alt,
+			   fid::text || '.glb' as model
+		FROM %s dev
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? 
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, ServiceAreasTileTableName, ServiceAreasTileTableName),
 		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err

@@ -8,6 +8,7 @@ export interface ZClipConfig {
 export interface TilesetConfig {
   value: string
   label: string
+  enabled: boolean
   url?: string
   options?: string[][]
   boundingVolume?: any
@@ -103,7 +104,7 @@ export class TilesetManager {
           key: config.value,
           name: config.label || config.value,
           url: config.url!,
-          visible: true,
+          visible: config.enabled,
           loading: true,
           allowZClip: Boolean(config.zClip?.enabled),
           zClipEnabled: Boolean(config.zClip?.enabled),
