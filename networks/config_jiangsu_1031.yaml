@@ -382,6 +382,7 @@ Tilesets:
         name: 标志杆
 
         lod:
+          lod1ModelMode: copy-lod3
           lod2ModelMode: copy-lod3
 
         match:
@@ -424,6 +425,52 @@ Tilesets:
               type: varchar
               column: bz
               autoCreate: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+
+      - id: little-pole
+        name: 小横臂
+
+        lod:
+          lod1ModelMode: copy-lod3
+          lod2ModelMode: copy-lod3
+
+        match:
+          operator: prefix
+          value: aa_xxb_model
+
+        keyMapping:
+          operator: removePrefix
+          value: aa_xxb_model.
+
+        table:
+          schema: public
+          name: aa_xxb_model
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: false
+            submit: false
 
           - name: geom
             label: 位置
@@ -727,6 +774,52 @@ Tilesets:
             storage:
               type: geom
               column: geom
+      - id: toll-name
+        name: 收费站名牌
+
+        lod:
+          lod0ModelMode: copy-lod3
+          lod1ModelMode: copy-lod3
+          lod2ModelMode: copy-lod3
+
+        match:
+          operator: prefix
+          value: toll_name
+
+        keyMapping:
+          operator: removePrefix
+          value: toll_name.
+
+        table:
+          schema: public
+          name: toll_name
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: name
+            label: 名称
+            list: true
+            search: true
+            editable: true
+            submit: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
       - id: service
         name: 服务区
 
@@ -759,6 +852,52 @@ Tilesets:
 
           - name: bz
             label: 备注
+            list: true
+            search: true
+            editable: true
+            submit: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+      - id: render-upright
+        name: 服务区立柱
+
+        lod:
+          lod0ModelMode: copy-lod3
+          lod1ModelMode: copy-lod3
+          lod2ModelMode: copy-lod3
+
+        match:
+          operator: prefix
+          value: render_upright_point
+
+        keyMapping:
+          operator: removePrefix
+          value: render_upright_point.
+
+        table:
+          schema: public
+          name: render_upright_point
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
             list: true
             search: true
             editable: true

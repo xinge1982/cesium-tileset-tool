@@ -145,8 +145,8 @@ const tileModelRootDir = "tiles"
 // configuration instead of a separate hard-coded error table.
 const geohashParentGeometricErrorScale = 2.0
 
-var buildingDemMap = make(map[string]cesium.Vec3)
-var buildingDemLock = sync.RWMutex{}
+var buildingDemMap = make(map[string]*cesium.Dimension)
+var buildingDemLock = sync.Mutex{}
 
 // tileModelRelativePath returns a URL-style relative path for a geohash tile.
 // A directory is added for every two geohash characters. Each directory keeps
@@ -1174,6 +1174,14 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 			for _, hashModels := range vs {
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
+		case DeviceFwqTileTableName:
+			vs, errQ := QueryDevicesFwqByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
 		case PoleTileTableName:
 			vs, errQ := QueryPolesByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
 			if errQ != nil {
@@ -1216,6 +1224,30 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 			}
 		case RenderTollBuildingTileTableName:
 			vs, errQ := QueryRenderTollBuildingsByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
+		case RenderUprightTileTableName:
+			vs, errQ := QueryRenderUprightByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
+		case TollNameTileTableName:
+			vs, errQ := QueryTollNamesByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
+		case LittlePolesTileTableName:
+			vs, errQ := QueryLittlePolesByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
 			if errQ != nil {
 				return nil, errQ
 			}
@@ -1474,6 +1506,32 @@ func QueryDevicesSfzByGeohashBBox(configName string, db *gorm.DB, geohash string
 }
 
 // 查询分片的所有模型数据
+func QueryDevicesFwqByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
+	var devices []*GeoHashModel
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.id, dev.chn_name as name, 'hdDevice' as type, dev.model, '%s' as table_name, 
+		       ST_X(ST_TRANSFORM(dev.geom, 4326)) AS lng,
+		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
+		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, 
+		       dev.transform, dev.obj_angle
+		FROM %s dev
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, DeviceFwqTileTableName, DeviceFwqTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+	if err != nil {
+		return nil, err
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	return models, err
+}
+
+// 查询分片的所有模型数据
 func QueryDevicesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
 	var devices []*GeoHashModel
 	err := db.Raw(fmt.Sprintf(`
@@ -1666,6 +1724,12 @@ func QueryBridgesByGeohashBBox(configName string, db *gorm.DB, geohash string, b
 		return nil, err
 	}
 
+	for _, device := range devices {
+		if device.Transform[2] != 0 {
+			device.Alt = device.Alt + device.Transform[2]
+		}
+	}
+
 	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
 	if err2 != nil {
 		return nil, err2
@@ -1757,6 +1821,116 @@ func QueryRenderTollBuildingsByGeohashBBox(configName string, db *gorm.DB, geoha
 		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, RenderTollBuildingTileTableName, RenderTollBuildingTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+	if err != nil {
+		return nil, err
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	// 计算transform
+	buildingDemLock.Lock()
+	defer buildingDemLock.Unlock()
+
+	var modelDem *cesium.Dimension
+	for _, device := range devices {
+		key := fmt.Sprintf("%s|%s", device.TableName, device.Model)
+		if cache, ok := buildingDemMap[key]; ok {
+			modelDem = cache
+		} else {
+			if device.Gltf != nil && len(device.Gltf.Content) > 0 {
+				dem, errD := cesium.CalculateDimensions(device.Gltf.Content)
+				if errD != nil {
+					return nil, errD
+				}
+				buildingDemMap[key] = dem
+				modelDem = dem
+			}
+		}
+
+		if modelDem != nil {
+			var scale = device.Height / modelDem.Height
+			device.Transform = getDeviceTransform(0, 1.0, scale, 1.0)
+		} else {
+			return nil, errors.New("model dem not found")
+		}
+	}
+
+	return models, err
+}
+
+// 查询分片的所有模型数据
+func QueryRenderUprightByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
+	var devices []*GeoHashModel
+
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.id, dev.id::text as name, 'hdBuilding' as type, dev.model, '%s' as table_name,
+		       ST_X(ST_TRANSFORM(dev.geom, 4326)) AS lng,
+		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
+		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, dev.transform
+		FROM %s dev
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, RenderUprightTileTableName, RenderUprightTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+	if err != nil {
+		return nil, err
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	return models, err
+}
+
+// 查询分片的所有模型数据
+func QueryTollNamesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
+	var devices []*GeoHashModel
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.id, dev.id::text as name, 'hdBuilding' as type, '%s' as table_name,
+		       ST_X(ST_TRANSFORM(dev.geom, 4326)) AS lng,
+		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
+		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt,
+			   id::text || '.glb' as model, mod((angle + 180.0)::numeric, 360.0) as obj_angle
+		FROM %s dev
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? 
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, TollNameTileTableName, TollNameTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+	if err != nil {
+		return nil, err
+	}
+
+	for _, device := range devices {
+		device.Transform = getDeviceTransform(device.ObjAngle, 1.0, 1.0, 1.0)
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	return models, err
+}
+
+// 查询分片的所有模型数据
+func QueryLittlePolesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
+	var devices []*GeoHashModel
+
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.id, dev.id::text as name, 'hdBuilding' as type, dev.model_name as model, '%s' as table_name,
+		       ST_X(ST_TRANSFORM(dev.geom, 4326)) AS lng,
+		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
+		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, dev.obj_angle, dev.transform
+		FROM %s dev
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, LittlePolesTileTableName, LittlePolesTileTableName),
 		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err

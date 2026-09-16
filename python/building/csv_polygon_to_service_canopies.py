@@ -80,6 +80,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--id-field", default="id")
     parser.add_argument("--type-field", default="type")
     parser.add_argument("--height-field", default="height")
+    parser.add_argument("--height-disable", action="store_true")
     parser.add_argument("--geometry-field", default="WKT")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
@@ -461,9 +462,12 @@ def main() -> int:
                 print(f"SKIP row {row_number}: {destination.name} exists")
                 continue
             try:
-                height = float((row.get(args.height_field) or "").strip())
-                if not math.isfinite(height):
-                    raise ValueError(f"invalid height {row.get(args.height_field)!r}")
+                if args.height_disable:
+                    height = args.thickness + 0.01
+                else:
+                    height = float((row.get(args.height_field) or "").strip())
+                    if not math.isfinite(height):
+                        raise ValueError(f"invalid height {row.get(args.height_field)!r}")
                 points = parse_polygon_z(row.get(args.geometry_field) or "")
                 top, bottom, longitude, latitude, altitude = local_surfaces(
                     points, height, args.thickness

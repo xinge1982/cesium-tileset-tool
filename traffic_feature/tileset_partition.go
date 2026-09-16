@@ -108,6 +108,7 @@ const (
 	QbbTileTableName                string = "hdtraffic_qbb"
 	DeviceTileTableName             string = "hdtraffic_ene"
 	DeviceSfzTileTableName          string = "hdtraffic_ene_sfz"
+	DeviceFwqTileTableName          string = "hdtraffic_ene_fwq"
 	PoleTileTableName               string = "hdpole"
 	GantryTileTableName             string = "hdgantry"
 	BridgeTileTableName             string = "hdtraffic_bridges"
@@ -115,6 +116,8 @@ const (
 	ServiceEquAreaTileTableName     string = "hdservice_equ_area"
 	RenderTollBuildingTileTableName string = "render_toll_building"
 	RenderUprightTileTableName      string = "render_upright_point"
+	TollNameTileTableName           string = "toll_name"
+	LittlePolesTileTableName        string = "aa_xxb_model"
 
 	MAX_GEOHASH_LEVEL int16 = 11
 	MIN_GEOHASH_LEVEL int16 = 3
