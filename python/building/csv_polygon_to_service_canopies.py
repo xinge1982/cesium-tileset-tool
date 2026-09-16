@@ -26,6 +26,7 @@ import argparse
 import csv
 import json
 import math
+import statistics
 import struct
 import sys
 from pathlib import Path
@@ -82,6 +83,17 @@ def parse_args() -> argparse.Namespace:
         help="top/bottom texture repeat size in metres (default: 4.0)",
     )
     parser.add_argument(
+        "--surface-mode", choices=("auto", "polygon", "strip"), default="auto",
+        help=(
+            "top/bottom meshing mode: auto reconstructs strongly curved long "
+            "canopies as strips (default: auto)"
+        ),
+    )
+    parser.add_argument(
+        "--cross-segments", type=int, default=4,
+        help="segments across a reconstructed curved strip (default: 4)",
+    )
+    parser.add_argument(
         "--texture-max-size", type=int, default=0,
         help="maximum texture width/height in pixels; 0 keeps original size",
     )
@@ -114,14 +126,16 @@ def selected_types(value: str) -> set[str]:
 
 
 def aligned_surface_uvs(
-    footprint: list[tuple[float, float]],
+    points: list[tuple[float, float]],
     repeat_size: float,
+    alignment_boundary: list[tuple[float, float]] | None = None,
 ) -> list[tuple[float, float]]:
     """Align the surface texture grid with the polygon's longest edge."""
+    boundary = alignment_boundary or points
     longest_start: tuple[float, float] | None = None
     longest_dx = longest_dy = longest_length = 0.0
-    for index, start in enumerate(footprint):
-        end = footprint[(index + 1) % len(footprint)]
+    for index, start in enumerate(boundary):
+        end = boundary[(index + 1) % len(boundary)]
         dx, dy = end[0] - start[0], end[1] - start[1]
         length = math.hypot(dx, dy)
         # Keep the first edge when lengths are effectively equal. This avoids
@@ -144,7 +158,7 @@ def aligned_surface_uvs(
             ((point[0] - longest_start[0]) * v_axis[0]
              + (point[1] - longest_start[1]) * v_axis[1]) / repeat_size,
         )
-        for point in footprint
+        for point in points
     ]
 
 
@@ -191,6 +205,114 @@ def local_surfaces(
         for point in top
     ]
     return top, bottom, anchor_lon, anchor_lat, anchor_altitude
+
+
+def horizontal_distance(
+    a: tuple[float, float, float], b: tuple[float, float, float]
+) -> float:
+    return math.hypot(b[0] - a[0], b[1] - a[1])
+
+
+def resample_chain(
+    chain: list[tuple[float, float, float]], fractions: list[float]
+) -> list[tuple[float, float, float]]:
+    cumulative = [0.0]
+    for start, end in zip(chain, chain[1:]):
+        cumulative.append(cumulative[-1] + horizontal_distance(start, end))
+    total = cumulative[-1]
+    if total <= 1e-6:
+        raise ValueError("curved canopy boundary chain has zero length")
+    parameters = [value / total for value in cumulative]
+    result: list[tuple[float, float, float]] = []
+    segment = 0
+    for fraction in fractions:
+        while segment + 1 < len(parameters) - 1 and parameters[segment + 1] < fraction:
+            segment += 1
+        start_t, end_t = parameters[segment], parameters[segment + 1]
+        ratio = 0.0 if end_t <= start_t else (fraction - start_t) / (end_t - start_t)
+        start, end = chain[segment], chain[segment + 1]
+        result.append(tuple(
+            start[axis] + (end[axis] - start[axis]) * ratio
+            for axis in range(3)
+        ))
+    return result
+
+
+def strip_surface_mesh(
+    boundary: list[tuple[float, float, float]],
+    cross_segments: int,
+    require_strong_caps: bool,
+) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]] | None:
+    """Reconstruct a curved canopy between two sampled longitudinal edges."""
+    count = len(boundary)
+    edge_lengths = [
+        horizontal_distance(boundary[index], boundary[(index + 1) % count])
+        for index in range(count)
+    ]
+    median_length = statistics.median(length for length in edge_lengths if length > 1e-6)
+    candidates: list[tuple[float, int, int]] = []
+    for first in range(count):
+        for second in range(first + 1, count):
+            if (first + 1) % count == second or (second + 1) % count == first:
+                continue
+            candidates.append((edge_lengths[first] + edge_lengths[second], first, second))
+    if not candidates:
+        return None
+    _, first_cap, second_cap = max(candidates)
+    if require_strong_caps and min(
+        edge_lengths[first_cap], edge_lengths[second_cap]
+    ) < median_length * 1.5:
+        return None
+
+    # The cap edges split the polygon ring into its two longitudinal sides.
+    first_chain = boundary[first_cap + 1:second_cap + 1]
+    second_chain = list(reversed(
+        boundary[second_cap + 1:] + boundary[:first_cap + 1]
+    ))
+    if len(first_chain) < 2 or len(second_chain) < 2:
+        return None
+
+    def normalized_parameters(chain: list[tuple[float, float, float]]) -> list[float]:
+        values = [0.0]
+        for start, end in zip(chain, chain[1:]):
+            values.append(values[-1] + horizontal_distance(start, end))
+        if values[-1] <= 1e-6:
+            return []
+        return [value / values[-1] for value in values]
+
+    fractions = sorted(set(
+        normalized_parameters(first_chain) + normalized_parameters(second_chain)
+    ))
+    if len(fractions) < 2:
+        return None
+    first_side = resample_chain(first_chain, fractions)
+    second_side = resample_chain(second_chain, fractions)
+
+    positions: list[tuple[float, float, float]] = []
+    for first, second in zip(first_side, second_side):
+        for cross_index in range(cross_segments + 1):
+            ratio = cross_index / cross_segments
+            positions.append(tuple(
+                first[axis] + (second[axis] - first[axis]) * ratio
+                for axis in range(3)
+            ))
+
+    row_width = cross_segments + 1
+    triangles: list[tuple[int, int, int]] = []
+
+    def append_upward(a: int, b: int, c: int) -> None:
+        pa, pb, pc = positions[a], positions[b], positions[c]
+        area = ((pb[0] - pa[0]) * (pc[1] - pa[1])
+                - (pb[1] - pa[1]) * (pc[0] - pa[0]))
+        triangles.append((a, b, c) if area >= 0 else (a, c, b))
+
+    for row in range(len(fractions) - 1):
+        for column in range(cross_segments):
+            a = row * row_width + column
+            b, c, d = a + 1, a + row_width + 1, a + row_width
+            append_upward(a, b, c)
+            append_upward(a, c, d)
+    return positions, triangles
 
 
 def subtract(
@@ -295,16 +417,40 @@ def create_canopy_glb(
     texture_max_size: int,
     texture_format: str,
     texture_quality: int,
+    surface_mode: str,
+    cross_segments: int,
 ) -> None:
     footprint = [(point[0], point[1]) for point in top_enu]
-    triangles = triangulate(footprint)
-    top_positions = [to_gltf(point) for point in top_enu]
-    bottom_positions = [to_gltf(point) for point in bottom_enu]
-    top_normals = [to_gltf(value) for value in surface_normals(top_enu, triangles, True)]
-    bottom_normals = [to_gltf(value) for value in surface_normals(bottom_enu, triangles, False)]
+    reconstructed = None
+    z_span = max(point[2] for point in top_enu) - min(point[2] for point in top_enu)
+    if surface_mode != "polygon" and (surface_mode == "strip" or z_span > 1e-3):
+        reconstructed = strip_surface_mesh(
+            top_enu, cross_segments, require_strong_caps=surface_mode == "auto",
+        )
+    if reconstructed is None:
+        surface_top = top_enu
+        triangles = triangulate(footprint)
+    else:
+        surface_top, triangles = reconstructed
+    thickness = top_enu[0][2] - bottom_enu[0][2]
+    surface_bottom = [
+        (point[0], point[1], point[2] - thickness) for point in surface_top
+    ]
+    top_positions = [to_gltf(point) for point in surface_top]
+    bottom_positions = [to_gltf(point) for point in surface_bottom]
+    top_normals = [
+        to_gltf(value) for value in surface_normals(surface_top, triangles, True)
+    ]
+    bottom_normals = [
+        to_gltf(value) for value in surface_normals(surface_bottom, triangles, False)
+    ]
     # Use one aligned UV set for both faces so top and bottom textures follow
     # the same dominant canopy edge instead of the global east/north axes.
-    surface_uvs = aligned_surface_uvs(footprint, surface_repeat_size)
+    surface_uvs = aligned_surface_uvs(
+        [(point[0], point[1]) for point in surface_top],
+        surface_repeat_size,
+        footprint,
+    )
     top_indices = [value for triangle in triangles for value in triangle]
     bottom_indices = [
         value
@@ -421,6 +567,7 @@ def main() -> int:
         args.thickness <= 0
         or args.side_repeat_width <= 0
         or args.surface_repeat_size <= 0
+        or args.cross_segments < 1
         or args.limit < 0
         or args.texture_max_size < 0
         or not 1 <= args.texture_quality <= 100
@@ -484,7 +631,8 @@ def main() -> int:
                     top, bottom, top_texture, bottom_texture, side_texture,
                     destination, args.side_repeat_width, args.surface_repeat_size,
                     args.texture_max_size, args.texture_format,
-                    args.texture_quality,
+                    args.texture_quality, args.surface_mode,
+                    args.cross_segments,
                 )
                 manifest_rows.append({
                     "id": identifier,
