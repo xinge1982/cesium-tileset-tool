@@ -27,9 +27,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    import bmesh
     import bpy
     from mathutils import Matrix, Vector
 except ImportError:  # Give a useful message when launched with normal Python.
+    bmesh = None
     bpy = None
     Matrix = None
     Vector = None
@@ -76,6 +78,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bevel-ratio", type=float, default=0.008,
         help="edge bevel depth relative to text height (default: 0.008)",
+    )
+    parser.add_argument(
+        "--curve-resolution", type=int, default=2,
+        help="font outline curve resolution; lower values reduce GLB size (default: 2)",
+    )
+    parser.add_argument(
+        "--bevel-resolution", type=int, default=0,
+        help="bevel segment count; 0 keeps a small bevel with minimum geometry (default: 0)",
+    )
+    parser.add_argument(
+        "--merge-distance", type=float, default=1e-6,
+        help="merge duplicate mesh vertices within this distance in metres (default: 1e-6)",
+    )
+    parser.add_argument(
+        "--decimate-ratio", type=float, default=1.0,
+        help="optional mesh simplification ratio in (0, 1]; 1 disables it (default: 1)",
     )
     parser.add_argument(
         "--letter-spacing", "--character-spacing",
@@ -196,6 +214,41 @@ def evaluated_bounds(obj: Any) -> tuple[list[float], list[float]]:
     return minimum, maximum
 
 
+def optimize_text_mesh(obj: Any, merge_distance: float, decimate_ratio: float) -> None:
+    """Remove redundant geometry and optionally simplify the converted glyph mesh."""
+    mesh = obj.data
+    editable = bmesh.new()
+    try:
+        editable.from_mesh(mesh)
+        if merge_distance > 0 and editable.verts:
+            bmesh.ops.remove_doubles(
+                editable, verts=list(editable.verts), dist=merge_distance,
+            )
+        if editable.edges:
+            bmesh.ops.dissolve_degenerate(
+                editable,
+                edges=list(editable.edges),
+                dist=max(merge_distance, 1e-12),
+            )
+        loose_vertices = [vertex for vertex in editable.verts if not vertex.link_edges]
+        if loose_vertices:
+            bmesh.ops.delete(editable, geom=loose_vertices, context="VERTS")
+        editable.to_mesh(mesh)
+    finally:
+        editable.free()
+    mesh.validate(clean_customdata=True)
+    mesh.update()
+
+    if decimate_ratio < 1.0:
+        modifier = obj.modifiers.new(name="TextSizeDecimate", type="DECIMATE")
+        modifier.decimate_type = "COLLAPSE"
+        modifier.ratio = decimate_ratio
+        modifier.use_collapse_triangulate = True
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+        bpy.ops.object.modifier_apply(modifier=modifier.name)
+
+
 def create_text_model(
     text: str,
     height: float,
@@ -215,8 +268,8 @@ def create_text_model(
     curve.space_character = args.letter_spacing
     curve.extrude = args.depth_ratio
     curve.bevel_depth = args.bevel_ratio
-    curve.bevel_resolution = 2
-    curve.resolution_u = 8
+    curve.bevel_resolution = args.bevel_resolution
+    curve.resolution_u = args.curve_resolution
 
     obj = bpy.data.objects.new(output_path.stem, curve)
     bpy.context.collection.objects.link(obj)
@@ -239,6 +292,7 @@ def create_text_model(
     scale = height / current_height
     obj.scale = (scale, scale, scale)
     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    optimize_text_mesh(obj, args.merge_distance, args.decimate_ratio)
 
     # Keep the placement origin below the horizontal center of the text and
     # raise its bottom by the configured metre offset.
@@ -265,6 +319,9 @@ def create_text_model(
         export_materials="EXPORT",
         export_cameras=False,
         export_lights=False,
+        export_animations=False,
+        export_skins=False,
+        export_morph=False,
     )
 
 
@@ -279,10 +336,15 @@ def main() -> int:
         print("error: run this script with Blender's Python", file=sys.stderr)
         return 2
     if (args.limit < 0 or args.depth_ratio <= 0 or args.bevel_ratio < 0
+            or args.curve_resolution < 1 or args.bevel_resolution < 0
+            or not math.isfinite(args.merge_distance) or args.merge_distance < 0
+            or not math.isfinite(args.decimate_ratio)
+            or not 0 < args.decimate_ratio <= 1
             or not math.isfinite(args.height) or args.height <= 0
             or not math.isfinite(args.height_offset)):
         print(
-            "error: limit/bevel must be non-negative and depth/height must be positive",
+            "error: invalid geometry option; resolutions/merge must be non-negative, "
+            "curve/depth/height positive, and decimate ratio within (0, 1]",
             file=sys.stderr,
         )
         return 2
@@ -310,6 +372,7 @@ def main() -> int:
     fields = [
         "id", "name", "text", "model", "longitude", "latitude", "altitude",
         "height", "heightOffset", "letterSpacing", "sourceAngle",
+        "curveResolution", "bevelResolution", "decimateRatio",
         "angleBaked", "recommendedObjAngle",
         "frontDirection", "northReferenceAxis", "origin", "sourceRow",
     ]
@@ -361,6 +424,9 @@ def main() -> int:
                     "height": f"{args.height:.6f}",
                     "heightOffset": f"{args.height_offset:.6f}",
                     "letterSpacing": f"{args.letter_spacing:g}",
+                    "curveResolution": args.curve_resolution,
+                    "bevelResolution": args.bevel_resolution,
+                    "decimateRatio": f"{args.decimate_ratio:g}",
                     "sourceAngle": f"{angle:.10f}",
                     "angleBaked": str(args.bake_angle).lower(),
                     "recommendedObjAngle": "0" if args.bake_angle else f"{angle:.10f}",
