@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import functools
+import io
 import json
 import math
 import mimetypes
@@ -141,6 +143,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=10.0,
         help="roof texture repeat size in metres",
+    )
+    parser.add_argument(
+        "--texture-max-size", type=int, default=0,
+        help="maximum texture width/height in pixels; 0 keeps original size",
+    )
+    parser.add_argument(
+        "--texture-format", choices=("keep", "png", "jpeg"), default="keep",
+        help="embedded texture format (default: keep source format)",
+    )
+    parser.add_argument(
+        "--texture-quality", type=int, default=85,
+        help="JPEG quality from 1 to 100 (default: 85)",
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
@@ -333,17 +347,120 @@ def vector_min_max(
 
 
 def mime_type(path: Path) -> str:
-    data = path.read_bytes()[:16]
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
-        return "image/webp"
+    data = path.read_bytes()
+    try:
+        return mime_type_from_data(data)
+    except ValueError:
+        pass
     guessed = mimetypes.guess_type(path.name)[0]
     if guessed in ("image/png", "image/jpeg", "image/webp"):
         return guessed
     raise ValueError(f"unsupported texture image format: {path}")
+
+
+def mime_type_from_data(data: bytes) -> str:
+    header = data[:16]
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if header.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return "image/webp"
+    raise ValueError("unsupported texture image data")
+
+
+@functools.lru_cache(maxsize=None)
+def optimized_texture_data(
+    path_text: str,
+    max_size: int,
+    output_format: str,
+    quality: int,
+) -> tuple[bytes, str]:
+    """Load and optionally resize/re-encode a texture once per process."""
+    path = Path(path_text)
+    source_data = path.read_bytes()
+    source_mime = mime_type_from_data(source_data)
+    if max_size == 0 and output_format == "keep":
+        return source_data, source_mime
+
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise ValueError(
+            "texture optimization requires Pillow: pip install Pillow"
+        ) from exc
+
+    with Image.open(io.BytesIO(source_data)) as image:
+        image.load()
+        changed_size = max_size > 0 and max(image.size) > max_size
+        if changed_size:
+            image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+        target_format = output_format
+        if target_format == "keep":
+            if not changed_size:
+                return source_data, source_mime
+            target_format = {
+                "image/png": "png",
+                "image/jpeg": "jpeg",
+                "image/webp": "png",
+            }[source_mime]
+
+        output = io.BytesIO()
+        if target_format == "jpeg":
+            if image.mode not in ("RGB", "L"):
+                background = Image.new("RGB", image.size, (255, 255, 255))
+                if "A" in image.getbands():
+                    background.paste(image.convert("RGBA"), mask=image.getchannel("A"))
+                    image = background
+                else:
+                    image = image.convert("RGB")
+            image.save(output, format="JPEG", quality=quality, optimize=True)
+            return output.getvalue(), "image/jpeg"
+
+        if image.mode == "P":
+            image = image.convert("RGBA")
+        image.save(output, format="PNG", optimize=True, compress_level=9)
+        return output.getvalue(), "image/png"
+
+
+def append_textured_materials(
+    document: dict[str, Any],
+    builder: BinaryBuilder,
+    destination: Path,
+    textures: Iterable[tuple[str, Path]],
+    max_size: int,
+    output_format: str,
+    quality: int,
+) -> None:
+    """Append materials while embedding identical image content only once."""
+    embedded: dict[tuple[str, bytes], int] = {}
+    for role, texture_path in textures:
+        image_data, image_mime = optimized_texture_data(
+            str(texture_path.resolve()), max_size, output_format, quality,
+        )
+        key = (image_mime, image_data)
+        texture_index = embedded.get(key)
+        if texture_index is None:
+            image_view = builder.add(image_data)
+            image_index = len(document["images"])
+            document["images"].append({
+                "name": f"{destination.stem}_{role}",
+                "bufferView": image_view,
+                "mimeType": image_mime,
+            })
+            texture_index = len(document["textures"])
+            document["textures"].append({"sampler": 0, "source": image_index})
+            embedded[key] = texture_index
+        document["materials"].append({
+            "name": f"{destination.stem}_{role}",
+            "pbrMetallicRoughness": {
+                "baseColorTexture": {"index": texture_index},
+                "metallicFactor": 0.0,
+                "roughnessFactor": 1.0,
+            },
+            "doubleSided": False,
+        })
 
 
 def append_accessor(
@@ -447,6 +564,9 @@ def create_glb(
     destination: Path,
     wall_repeat_width: float,
     roof_repeat_size: float,
+    texture_max_size: int,
+    texture_format: str,
+    texture_quality: int,
 ) -> None:
     roof_triangles = triangulate(footprint)
     wall_positions: list[tuple[float, float, float]] = []
@@ -519,28 +639,11 @@ def create_glb(
         roof_uvs, roof_indices, 1,
     ))
 
-    for name, texture_path in (
-        ("wall", style.wall_texture),
-        ("roof", style.roof_texture),
-    ):
-        image_data = texture_path.read_bytes()
-        image_view = builder.add(image_data)
-        image_index = len(document["images"])
-        document["images"].append({
-            "name": f"{destination.stem}_{name}",
-            "bufferView": image_view,
-            "mimeType": mime_type(texture_path),
-        })
-        document["textures"].append({"sampler": 0, "source": image_index})
-        document["materials"].append({
-            "name": f"{destination.stem}_{name}",
-            "pbrMetallicRoughness": {
-                "baseColorTexture": {"index": image_index},
-                "metallicFactor": 0.0,
-                "roughnessFactor": 1.0,
-            },
-            "doubleSided": False,
-        })
+    append_textured_materials(
+        document, builder, destination,
+        (("wall", style.wall_texture), ("roof", style.roof_texture)),
+        texture_max_size, texture_format, texture_quality,
+    )
 
     document["bufferViews"] = builder.json_views()
     while len(builder.data) % 4:
@@ -584,8 +687,12 @@ def main() -> int:
     if min(
         args.wall_repeat_width,
         args.roof_repeat_size,
-    ) <= 0 or args.limit < 0:
-        print("error: texture repeat sizes must be positive and limit non-negative", file=sys.stderr)
+    ) <= 0 or args.limit < 0 or args.texture_max_size < 0 \
+            or not 1 <= args.texture_quality <= 100:
+        print(
+            "error: repeat sizes/quality must be positive and limits non-negative",
+            file=sys.stderr,
+        )
         return 2
     try:
         styles = load_styles(args)
@@ -637,6 +744,8 @@ def main() -> int:
                 create_glb(
                     footprint, height, storeys, style, destination,
                     args.wall_repeat_width, args.roof_repeat_size,
+                    args.texture_max_size, args.texture_format,
+                    args.texture_quality,
                 )
                 manifest_rows.append({
                     "id": identifier,

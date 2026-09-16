@@ -32,6 +32,7 @@ from csv_polygon_to_flat_buildings import (
     BinaryBuilder,
     EARTH_A,
     EARTH_E2,
+    append_textured_materials,
     append_accessor,
     mime_type,
     pack_floats,
@@ -76,6 +77,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=4.0,
         help="top/bottom texture repeat size in metres (default: 4.0)",
+    )
+    parser.add_argument(
+        "--texture-max-size", type=int, default=0,
+        help="maximum texture width/height in pixels; 0 keeps original size",
+    )
+    parser.add_argument(
+        "--texture-format", choices=("keep", "png", "jpeg"), default="keep",
+        help="embedded texture format (default: keep source format)",
+    )
+    parser.add_argument(
+        "--texture-quality", type=int, default=85,
+        help="JPEG quality from 1 to 100 (default: 85)",
     )
     parser.add_argument("--id-field", default="id")
     parser.add_argument("--type-field", default="type")
@@ -273,6 +286,9 @@ def create_canopy_glb(
     destination: Path,
     side_repeat_width: float,
     surface_repeat_size: float,
+    texture_max_size: int,
+    texture_format: str,
+    texture_quality: int,
 ) -> None:
     footprint = [(point[0], point[1]) for point in top_enu]
     triangles = triangulate(footprint)
@@ -358,30 +374,11 @@ def create_canopy_glb(
         side_uvs, side_indices, 2,
     ))
 
-    for role, texture_path in (
-        ("top", top_texture),
-        ("bottom", bottom_texture),
-        ("side", side_texture),
-    ):
-        image_data = texture_path.read_bytes()
-        image_view = builder.add(image_data)
-        image_index = len(document["images"])
-        document["images"].append({
-            "name": f"{destination.stem}_{role}",
-            "bufferView": image_view,
-            "mimeType": mime_type(texture_path),
-        })
-        texture_index = len(document["textures"])
-        document["textures"].append({"sampler": 0, "source": image_index})
-        document["materials"].append({
-            "name": f"{destination.stem}_{role}",
-            "pbrMetallicRoughness": {
-                "baseColorTexture": {"index": texture_index},
-                "metallicFactor": 0.0,
-                "roughnessFactor": 1.0,
-            },
-            "doubleSided": False,
-        })
+    append_textured_materials(
+        document, builder, destination,
+        (("top", top_texture), ("bottom", bottom_texture), ("side", side_texture)),
+        texture_max_size, texture_format, texture_quality,
+    )
 
     document["bufferViews"] = builder.json_views()
     while len(builder.data) % 4:
@@ -419,8 +416,13 @@ def main() -> int:
         or args.side_repeat_width <= 0
         or args.surface_repeat_size <= 0
         or args.limit < 0
+        or args.texture_max_size < 0
+        or not 1 <= args.texture_quality <= 100
     ):
-        print("error: thickness/repeat sizes must be positive and limit non-negative", file=sys.stderr)
+        print(
+            "error: thickness/repeat sizes/quality must be positive and limits non-negative",
+            file=sys.stderr,
+        )
         return 2
     try:
         canopy_types = selected_types(args.canopy_types)
@@ -475,6 +477,8 @@ def main() -> int:
                 create_canopy_glb(
                     top, bottom, top_texture, bottom_texture, side_texture,
                     destination, args.side_repeat_width, args.surface_repeat_size,
+                    args.texture_max_size, args.texture_format,
+                    args.texture_quality,
                 )
                 manifest_rows.append({
                     "id": identifier,
