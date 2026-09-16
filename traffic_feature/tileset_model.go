@@ -768,6 +768,11 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 							builtLODs = nil
 							break
 						}
+					} else {
+						// The database instances are also the lookup source for local
+						// LOD0-LOD2 models. Keep instances whose LOD3 content is absent
+						// until this point, then exclude them only from the LOD3 build.
+						lodModels = modelsWithGLTFContent(models)
 					}
 					if len(lodModels) == 0 {
 						continue
@@ -912,6 +917,19 @@ func loadLocalLODModels(cfg *config.Config, level tileLODLevel, source map[strin
 		}
 	}
 	return result, nil
+}
+
+func modelsWithGLTFContent(source map[string][]*GeoHashModel) map[string][]*GeoHashModel {
+	result := make(map[string][]*GeoHashModel)
+	for key, instances := range source {
+		for _, instance := range instances {
+			if instance == nil || instance.Gltf == nil || len(instance.Gltf.Content) == 0 {
+				continue
+			}
+			result[key] = append(result[key], instance)
+		}
+	}
+	return result
 }
 
 func localLODModelPath(root, tableName, modelName string, level int) (string, error) {
@@ -1846,6 +1864,14 @@ func QueryServiceAreasByGeohashBBox(configName string, db *gorm.DB, geohash stri
 	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
 	if err2 != nil {
 		return nil, err2
+	}
+	// Service-area indicator models may intentionally exist only in lower LOD
+	// folders. Preserve their database instances even when no LOD3 GLB exists,
+	// so doTileJob can still resolve the configured local LOD0-LOD2 files.
+	for _, device := range devices {
+		if device != nil && device.Gltf == nil {
+			appendGeoHashModelsByGroup(models, device)
+		}
 	}
 
 	return models, err

@@ -250,6 +250,67 @@ func TestBuildLODNodeChain(t *testing.T) {
 	}
 }
 
+func TestModelsWithGLTFContentFiltersOnlyLOD3BuildInput(t *testing.T) {
+	missing := &GeoHashModel{
+		Id: "1", TableName: ServiceAreasTileTableName, Model: "1.glb",
+	}
+	empty := &GeoHashModel{
+		Id: "2", TableName: ServiceAreasTileTableName, Model: "2.glb",
+		Gltf: &GltfModel{},
+	}
+	available := &GeoHashModel{
+		Id: "3", TableName: ServiceAreasTileTableName, Model: "3.glb",
+		Gltf: &GltfModel{Content: []byte("lod3")},
+	}
+	source := map[string][]*GeoHashModel{
+		"missing": []*GeoHashModel{missing},
+		"mixed":   []*GeoHashModel{empty, available},
+	}
+
+	filtered := modelsWithGLTFContent(source)
+	if len(filtered) != 1 || len(filtered["mixed"]) != 1 || filtered["mixed"][0] != available {
+		t.Fatalf("unexpected filtered LOD3 models: %+v", filtered)
+	}
+	if len(source) != 2 || len(source["missing"]) != 1 || source["missing"][0] != missing {
+		t.Fatal("filtering LOD3 models mutated the lower-LOD lookup source")
+	}
+}
+
+func TestLoadLocalLODModelsWithoutLOD3Content(t *testing.T) {
+	networkFolder := t.TempDir()
+	modelPath := filepath.Join(
+		networkFolder, "lod0", ServiceAreasTileTableName, "1.glb",
+	)
+	if err := os.MkdirAll(filepath.Dir(modelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(modelPath, []byte("local-lod0"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	instance := &GeoHashModel{
+		Id: "1", TableName: ServiceAreasTileTableName, Model: "1.glb",
+	}
+	source := make(map[string][]*GeoHashModel)
+	appendGeoHashModelsByGroup(source, instance)
+	loaded, err := loadLocalLODModels(
+		&config.Config{NetworkFolder: networkFolder},
+		tileLODLevel{Level: 0, ModelFolder: "lod0", GeometricError: 120},
+		source,
+		&localLODModelCache{models: make(map[string]*GltfModel)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := loaded[geoHashModelGroupKey(instance)]
+	if len(group) != 1 || group[0].Gltf == nil || string(group[0].Gltf.Content) != "local-lod0" {
+		t.Fatalf("local LOD0 was not loaded without LOD3 content: %+v", group)
+	}
+	if instance.Gltf != nil {
+		t.Fatal("loading local LOD0 mutated the source instance")
+	}
+}
+
 func TestGeohashGeometricErrorUsesConfiguredLODBase(t *testing.T) {
 	lod := config.TilesetLODConfig{
 		Enabled: true,
