@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Generate conspicuous LOD0 service-area indicator GLBs from POLYGON Z CSV.
 
-Each GLB is a flat, translucent colored slab with a solid rounded outline. The
-model origin follows the other building generators: longitude, latitude and Z
-are the center of the source polygon's 3D bounding box. The source Z values are
+Each GLB is a flat, translucent colored slab with a solid rounded outline.
+Rows whose travel_type is 1 also receive a large vertical, double-sided name
+plane aligned to the service area's longest horizontal direction. The model
+origin follows the other building generators: longitude, latitude and Z are
+the center of the source polygon's 3D bounding box. The source Z values are
 used for placement only; the indicator itself is horizontal and rises along Z.
 
 Example:
@@ -11,13 +13,15 @@ Example:
     python csv_polygon_to_service_area_indicators.py service_areas.csv -o output \
         --fill-color '#00C8FF' --fill-opacity 0.35 \
         --outline-color '#FFD400' --outline-width 1.5 \
-        --height-offset 1.0 --thickness 0.8 --overwrite
+        --height-offset 1.0 --thickness 0.8 \
+        --text-height 20 --text-lift 6 --font simhei.ttf --overwrite
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import math
 import re
@@ -48,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", "-o", type=Path, required=True)
     parser.add_argument("--id-field", default="fid")
     parser.add_argument("--name-field", default="name")
+    parser.add_argument("--travel-type-field", default="travel_type")
     parser.add_argument("--sa-id-field", default="sa_id")
     parser.add_argument("--geometry-field", default="WKT")
     parser.add_argument("--fill-color", default="#00C8FF")
@@ -74,6 +79,16 @@ def parse_args() -> argparse.Namespace:
         "--thickness", type=float, default=0.8,
         help="vertical slab thickness in metres (default: 0.8)",
     )
+    parser.add_argument("--text-height", type=float, default=20.0,
+                        help="travel_type=1 name height in metres (default: 20)")
+    parser.add_argument("--text-lift", type=float, default=6.0,
+                        help="gap from slab top to name bottom in metres (default: 6)")
+    parser.add_argument("--text-color", default="#FFFFFF")
+    parser.add_argument("--text-outline-color", default="#00506A")
+    parser.add_argument("--font", type=Path,
+                        help="Chinese TTF/TTC font; defaults to a system CJK font")
+    parser.add_argument("--text-texture-height", type=int, default=256,
+                        help="name texture height in pixels (default: 256)")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
     return parser.parse_args()
@@ -122,6 +137,115 @@ def append_mesh_primitive(
         "indices": index_accessor,
         "material": material,
         "mode": 4,
+    }
+
+
+def find_font(configured: Path | None) -> Path:
+    if configured is not None:
+        font = configured.expanduser().resolve()
+        if not font.is_file():
+            raise ValueError(f"font does not exist: {font}")
+        return font
+    candidates = (
+        Path("C:/Windows/Fonts/simhei.ttf"),
+        Path("C:/Windows/Fonts/msyh.ttc"),
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Black.ttc"),
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/System/Library/Fonts/PingFang.ttc"),
+    )
+    for font in candidates:
+        if font.is_file():
+            return font.resolve()
+    raise ValueError("no Chinese font found; specify --font, e.g. simhei.ttf")
+
+
+def render_name_texture(
+    text: str, font_path: Path, texture_height: int,
+    color: str, outline_color: str,
+) -> tuple[bytes, float]:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError as exc:
+        raise ValueError("Pillow is required for service-area name textures") from exc
+    padding = max(8, texture_height // 18)
+    stroke = max(2, texture_height // 40)
+    font = ImageFont.truetype(str(font_path), texture_height - 2 * (padding + stroke))
+    draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    left, top, right, bottom = draw.textbbox(
+        (0, 0), text, font=font, stroke_width=stroke,
+    )
+    width = max(1, right - left) + 2 * padding
+    height = max(1, bottom - top) + 2 * padding
+    image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    ImageDraw.Draw(image).text(
+        (padding - left, padding - top), text, font=font, fill=color,
+        stroke_width=stroke, stroke_fill=outline_color,
+    )
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue(), width / height
+
+
+def longest_direction(
+    footprint: list[tuple[float, float]],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Return the principal direction and the oriented bounding-box center."""
+    center_x = sum(x for x, _ in footprint) / len(footprint)
+    center_y = sum(y for _, y in footprint) / len(footprint)
+    xx = sum((x - center_x) ** 2 for x, _ in footprint)
+    yy = sum((y - center_y) ** 2 for _, y in footprint)
+    xy = sum((x - center_x) * (y - center_y) for x, y in footprint)
+    angle = 0.5 * math.atan2(2.0 * xy, xx - yy)
+    direction = (math.cos(angle), math.sin(angle))
+    normal = (-direction[1], direction[0])
+    along = [x * direction[0] + y * direction[1] for x, y in footprint]
+    across = [x * normal[0] + y * normal[1] for x, y in footprint]
+    along_center = (min(along) + max(along)) * 0.5
+    across_center = (min(across) + max(across)) * 0.5
+    return direction, (
+        direction[0] * along_center + normal[0] * across_center,
+        direction[1] * along_center + normal[1] * across_center,
+    )
+
+
+def append_name_primitive(
+    document: dict[str, Any], builder: BinaryBuilder,
+    footprint: list[tuple[float, float]], bottom_z: float,
+    text_height: float, aspect: float, material: int,
+) -> dict[str, Any]:
+    direction, center = longest_direction(footprint)
+    half_width = text_height * aspect * 0.5
+    left = (center[0] - direction[0] * half_width,
+            center[1] - direction[1] * half_width)
+    right = (center[0] + direction[0] * half_width,
+             center[1] + direction[1] * half_width)
+    # Separate front/back faces keep the name readable from both directions.
+    enu = [
+        (left[0], left[1], bottom_z), (right[0], right[1], bottom_z),
+        (right[0], right[1], bottom_z + text_height),
+        (left[0], left[1], bottom_z + text_height),
+    ] * 2
+    positions = [to_gltf(point) for point in enu]
+    uvs = [(0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)] * 2
+    indices = [0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6]
+    minimum, maximum = vector_min_max(positions)
+    position_accessor = append_accessor(
+        document, builder,
+        pack_floats(value for point in positions for value in point),
+        5126, "VEC3", len(positions), 34962, minimum, maximum,
+    )
+    uv_accessor = append_accessor(
+        document, builder, pack_floats(value for uv in uvs for value in uv),
+        5126, "VEC2", len(uvs), 34962, [0.0, 0.0], [1.0, 1.0],
+    )
+    index_data, component_type = pack_indices(indices)
+    index_accessor = append_accessor(
+        document, builder, index_data, component_type,
+        "SCALAR", len(indices), 34963, [0], [7],
+    )
+    return {
+        "attributes": {"POSITION": position_accessor, "TEXCOORD_0": uv_accessor},
+        "indices": index_accessor, "material": material, "mode": 4,
     }
 
 
@@ -231,6 +355,10 @@ def create_indicator_glb(
     outline_lift: float,
     height_offset: float,
     thickness: float,
+    name_texture: bytes | None,
+    text_height: float,
+    text_lift: float,
+    text_aspect: float,
 ) -> None:
     slab_positions, slab_indices = slab_geometry(footprint, height_offset, thickness)
     outline_positions, outline_indices = outline_geometry(
@@ -271,6 +399,28 @@ def create_indicator_glb(
     primitives.append(append_mesh_primitive(
         document, builder, outline_positions, outline_indices, 1,
     ))
+    if name_texture is not None:
+        image_view = builder.add(name_texture)
+        document["images"] = [{"bufferView": image_view, "mimeType": "image/png"}]
+        document["samplers"] = [{
+            "magFilter": 9729, "minFilter": 9987,
+            "wrapS": 33071, "wrapT": 33071,
+        }]
+        document["textures"] = [{"sampler": 0, "source": 0}]
+        document["materials"].append({
+            "name": f"{destination.stem}_name",
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+                "baseColorTexture": {"index": 0},
+                "metallicFactor": 0.0, "roughnessFactor": 1.0,
+            },
+            "alphaMode": "BLEND",
+            "extensions": {"KHR_materials_unlit": {}},
+        })
+        primitives.append(append_name_primitive(
+            document, builder, footprint, height_offset + text_lift,
+            text_height, text_aspect, 2,
+        ))
     document["bufferViews"] = builder.json_views()
     while len(builder.data) % 4:
         builder.data.append(0)
@@ -297,6 +447,7 @@ def main() -> int:
     numeric_values = (
         args.fill_opacity, args.outline_opacity, args.outline_width,
         args.outline_lift, args.height_offset, args.thickness,
+        args.text_height, args.text_lift,
     )
     if (
         not all(math.isfinite(value) for value in numeric_values)
@@ -305,6 +456,9 @@ def main() -> int:
         or args.outline_width <= 0.0
         or args.outline_lift < 0.0
         or args.thickness <= 0.0
+        or args.text_height <= 0.0
+        or args.text_lift < 0.0
+        or args.text_texture_height < 64
         or args.outline_segments < 3
         or args.limit < 0
     ):
@@ -313,6 +467,9 @@ def main() -> int:
     try:
         fill_color = parse_color(args.fill_color, "--fill-color")
         outline_color = parse_color(args.outline_color, "--outline-color")
+        parse_color(args.text_color, "--text-color")
+        parse_color(args.text_outline_color, "--text-outline-color")
+        font_path = find_font(args.font)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -322,13 +479,17 @@ def main() -> int:
     fields = [
         "id", "name", "saId", "model", "longitude", "latitude", "altitude",
         "heightOffset", "thickness", "fillColor", "fillOpacity",
-        "outlineColor", "outlineOpacity", "outlineWidth", "origin", "sourceRow",
+        "outlineColor", "outlineOpacity", "outlineWidth", "travelType",
+        "hasNameSign", "textHeight", "textLift", "origin", "sourceRow",
     ]
     rows: list[dict[str, Any]] = []
     generated = skipped = failed = 0
     with input_path.open("r", encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
-        required = {args.id_field, args.name_field, args.geometry_field}
+        required = {
+            args.id_field, args.name_field, args.travel_type_field,
+            args.geometry_field,
+        }
         missing = required.difference(reader.fieldnames or [])
         if missing:
             print(f"error: CSV fields not found: {sorted(missing)}", file=sys.stderr)
@@ -339,6 +500,7 @@ def main() -> int:
             identifier = (row.get(args.id_field) or "").strip()
             name = (row.get(args.name_field) or "").strip()
             sa_id = (row.get(args.sa_id_field) or "").strip()
+            travel_type = (row.get(args.travel_type_field) or "").strip()
             destination = output_dir / f"{safe_filename(identifier)}.glb"
             if destination.exists() and not args.overwrite:
                 skipped += 1
@@ -350,12 +512,20 @@ def main() -> int:
                 points = parse_polygon_z(row.get(args.geometry_field) or "")
                 footprint, longitude, latitude = local_footprint(points)
                 _, _, altitude = source_bbox_center(points)
+                name_texture = None
+                text_aspect = 1.0
+                if travel_type == "1" and name:
+                    name_texture, text_aspect = render_name_texture(
+                        name, font_path, args.text_texture_height,
+                        args.text_color, args.text_outline_color,
+                    )
                 create_indicator_glb(
                     footprint, destination, name, identifier, sa_id,
                     fill_color, args.fill_opacity,
                     outline_color, args.outline_opacity,
                     args.outline_width, args.outline_segments,
                     args.outline_lift, args.height_offset, args.thickness,
+                    name_texture, args.text_height, args.text_lift, text_aspect,
                 )
                 rows.append({
                     "id": identifier,
@@ -372,6 +542,10 @@ def main() -> int:
                     "outlineColor": args.outline_color,
                     "outlineOpacity": f"{args.outline_opacity:g}",
                     "outlineWidth": f"{args.outline_width:.6f}",
+                    "travelType": travel_type,
+                    "hasNameSign": "1" if name_texture is not None else "0",
+                    "textHeight": f"{args.text_height:.6f}",
+                    "textLift": f"{args.text_lift:.6f}",
                     "origin": "source-polygon-3d-bounding-box-center",
                     "sourceRow": row_number,
                 })
