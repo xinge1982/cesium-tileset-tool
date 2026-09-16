@@ -1928,7 +1928,7 @@ func QueryLittlePolesByGeohashBBox(configName string, db *gorm.DB, geohash strin
 		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
 		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, dev.obj_angle, dev.transform
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model_name like '%%glb' or dev.model_name like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, LittlePolesTileTableName, LittlePolesTileTableName),
 		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error

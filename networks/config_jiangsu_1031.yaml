@@ -224,6 +224,12 @@ Tilesets:
         name: 收费站设备
 
         lod:
+          lod1ModelMode: copy-lod3-by-prefix
+          lod1ModelPrefixes:
+            - dld_
+            - sft_
+            - cxjcq_
+          lod1UnmatchedMode: local
           lod2ModelMode: copy-lod3-by-prefix
           lod2ModelPrefixes:
             - sxj_
