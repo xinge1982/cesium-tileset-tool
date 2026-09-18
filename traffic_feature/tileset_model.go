@@ -1280,6 +1280,14 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 			for _, hashModels := range vs {
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
+		case BillboardsTileTableName:
+			vs, errQ := QueryBillboardsByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
 		default:
 			return nil, fmt.Errorf("Unsupport table %s", name)
 		}
@@ -1818,7 +1826,7 @@ func QueryServiceEquAreaByGeohashBBox(configName string, db *gorm.DB, geohash st
 				   ) / 2.0 as alt,
 			   id::text || '.glb' as model
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? AND dev.type not in ('2','6')
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? AND dev.type not in ('2')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, ServiceEquAreaTileTableName, ServiceEquAreaTileTableName),
 		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
@@ -1872,6 +1880,32 @@ func QueryServiceAreasByGeohashBBox(configName string, db *gorm.DB, geohash stri
 		if device != nil && device.Gltf == nil {
 			appendGeoHashModelsByGroup(models, device)
 		}
+	}
+
+	return models, err
+}
+
+// 查询分片的所有模型数据
+func QueryBillboardsByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
+	var devices []*GeoHashModel
+
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.id, dev.id::text as name, 'hdBuilding' as type, dev.model_name as model, '%s' as table_name,
+		       ST_X(ST_TRANSFORM(dev.geom, 4326)) AS lng,
+		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
+		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, dev.obj_angle
+		FROM %s dev
+		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model_name like '%%glb' or dev.model_name like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, BillboardsTileTableName, BillboardsTileTableName),
+		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+	if err != nil {
+		return nil, err
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
+	if err2 != nil {
+		return nil, err2
 	}
 
 	return models, err

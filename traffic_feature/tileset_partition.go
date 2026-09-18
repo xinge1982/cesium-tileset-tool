@@ -119,6 +119,7 @@ const (
 	TollNameTileTableName           string = "toll_name"
 	LittlePolesTileTableName        string = "aa_xxb_model"
 	ServiceAreasTileTableName       string = "hdservice_area"
+	BillboardsTileTableName         string = "hd_road_side_billboard"
 
 	MAX_GEOHASH_LEVEL int16 = 11
 	MIN_GEOHASH_LEVEL int16 = 3

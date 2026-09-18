@@ -1,5 +1,6 @@
 Desc: sw_jiangsu_1031
 Bound: 120.9509,31.7113,121.0263,31.8967
+#Bound: 120.527,30.886,121.997,32.605
 
 DefaultView:
   lon: 120.99298821
@@ -919,6 +920,54 @@ Tilesets:
             storage:
               type: geom
               column: geom
+
+      - id: ggp
+        name: 广告牌
+
+        lod:
+          lod0ModelMode: local
+          lod1ModelMode: local
+          lod2ModelMode: copy-lod3
+
+        match:
+          operator: prefix
+          value: hd_road_side_billboard
+
+        keyMapping:
+          operator: removePrefix
+          value: hd_road_side_billboard.
+
+        table:
+          schema: public
+          name: hd_road_side_billboard
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: true
+            submit: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+
     boundingVolume:
       scale: 4.0
       minimumRadius: 50.0
@@ -931,22 +980,18 @@ Tilesets:
     lod:
       enabled: true
 
-      # 远距离：桥面水平投影 + 桥塔前后贴片
       lod0:
         modelFolder: lod0
-        geometricError: 120.0
+        geometricError: 100.0
 
-      # 中远距离：桥面、桥墩、桥塔等主体简化结构
       lod1:
         modelFolder: lod1
-        geometricError: 35.0
+        geometricError: 65.0
 
-      # 近距离：主要结构和附属设施
       lod2:
         modelFolder: lod2
         geometricError: 7.0
 
-      # 最近距离：完整精细模型
       lod3:
         modelFolder: lod3
         geometricError: 0
