@@ -117,6 +117,71 @@ type TileJobResult struct {
 	geohash string
 	node    *TileNode
 	err     error
+	stats   tileGenerationStats
+}
+
+const tilesetGenerationReportFilename = "tileset-generation-report.json"
+
+type missingModelInfo struct {
+	LOD          int    `json:"lod"`
+	Geohash      string `json:"geohash"`
+	TableName    string `json:"tableName"`
+	Model        string `json:"model"`
+	ModelMode    string `json:"modelMode"`
+	ExpectedPath string `json:"expectedPath,omitempty"`
+	Instances    int    `json:"instances"`
+	Reason       string `json:"reason"`
+}
+
+type lodGenerationStats struct {
+	LOD                     int                `json:"lod"`
+	ModelFolder             string             `json:"modelFolder"`
+	GeometricError          float64            `json:"geometricError"`
+	ModelGroupsRequested    int                `json:"modelGroupsRequested"`
+	ModelGroupsAvailable    int                `json:"modelGroupsAvailable"`
+	ModelInstancesAvailable int                `json:"modelInstancesAvailable"`
+	MissingModelGroups      int                `json:"missingModelGroups"`
+	SkippedModelGroups      int                `json:"skippedModelGroups"`
+	TileFilesGenerated      int                `json:"tileFilesGenerated"`
+	TileBytesGenerated      int64              `json:"tileBytesGenerated"`
+	MissingModels           []missingModelInfo `json:"missingModels"`
+}
+
+type outputFileStats struct {
+	TilesetJSONBytes int64 `json:"tilesetJsonBytes"`
+	GLBFiles         int   `json:"glbFiles"`
+	GLBBytes         int64 `json:"glbBytes"`
+	TotalFiles       int   `json:"totalFiles"`
+	TotalBytes       int64 `json:"totalBytes"`
+}
+
+type tilesetGenerationReport struct {
+	Version                int                  `json:"version"`
+	Status                 string               `json:"status"`
+	Error                  string               `json:"error,omitempty"`
+	Warnings               []string             `json:"warnings"`
+	ConfigName             string               `json:"configName"`
+	PartitionTable         string               `json:"partitionTable"`
+	Bound                  string               `json:"bound"`
+	OutputDirectory        string               `json:"outputDirectory"`
+	TilesetPath            string               `json:"tilesetPath"`
+	StartedAt              string               `json:"startedAt"`
+	CompletedAt            string               `json:"completedAt"`
+	DurationMilliseconds   int64                `json:"durationMilliseconds"`
+	StageMilliseconds      map[string]int64      `json:"stageMilliseconds"`
+	LeafTilesFound         int                  `json:"leafTilesFound"`
+	LeafTilesWithData      int                  `json:"leafTilesWithData"`
+	LeafTilesWithoutData   int                  `json:"leafTilesWithoutData"`
+	LeafTilesGenerated     int                  `json:"leafTilesGenerated"`
+	LeafTilesWithoutOutput int                  `json:"leafTilesWithoutOutput"`
+	LOD                    []lodGenerationStats `json:"lod"`
+	Files                  outputFileStats      `json:"files"`
+}
+
+type tileGenerationStats struct {
+	queried bool
+	hasData bool
+	byLOD   map[int]*lodGenerationStats
 }
 
 type tileLODLevel struct {
@@ -458,8 +523,121 @@ func UpdateTileByGeoHash(configName string, partitionTable string, tilesetsFolde
 	return nil
 }
 
+func newTilesetGenerationReport(configName, partitionTable, tilesetsFolder, bound string, started time.Time) *tilesetGenerationReport {
+	absOutput, err := filepath.Abs(tilesetsFolder)
+	if err != nil {
+		absOutput = tilesetsFolder
+	}
+	return &tilesetGenerationReport{
+		Version:           1,
+		Status:            "running",
+		Warnings:          make([]string, 0),
+		ConfigName:        configName,
+		PartitionTable:    partitionTable,
+		Bound:             bound,
+		OutputDirectory:   absOutput,
+		TilesetPath:       filepath.Join(absOutput, "tileset.json"),
+		StartedAt:         started.Format(time.RFC3339Nano),
+		StageMilliseconds: make(map[string]int64),
+	}
+}
+
+func sortTilesetGenerationReport(report *tilesetGenerationReport) {
+	sort.Slice(report.LOD, func(i, j int) bool {
+		return report.LOD[i].LOD < report.LOD[j].LOD
+	})
+	for index := range report.LOD {
+		missing := report.LOD[index].MissingModels
+		if missing == nil {
+			report.LOD[index].MissingModels = make([]missingModelInfo, 0)
+			continue
+		}
+		sort.Slice(missing, func(i, j int) bool {
+			left := fmt.Sprintf("%s\x00%s\x00%s", missing[i].Geohash, missing[i].TableName, missing[i].Model)
+			right := fmt.Sprintf("%s\x00%s\x00%s", missing[j].Geohash, missing[j].TableName, missing[j].Model)
+			return left < right
+		})
+	}
+}
+
+func writeTilesetGenerationReport(folder string, report *tilesetGenerationReport) error {
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal tileset generation report: %w", err)
+	}
+	filename := filepath.Join(folder, tilesetGenerationReportFilename)
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("write tileset generation report %s: %w", filename, err)
+	}
+	return nil
+}
+
+func collectOutputFileStats(folder string) (outputFileStats, error) {
+	stats := outputFileStats{}
+	err := filepath.WalkDir(folder, func(filename string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || entry.Name() == tilesetGenerationReportFilename {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		stats.TotalFiles++
+		stats.TotalBytes += info.Size()
+		switch strings.ToLower(filepath.Ext(entry.Name())) {
+		case ".glb":
+			stats.GLBFiles++
+			stats.GLBBytes += info.Size()
+		case ".json":
+			if entry.Name() == "tileset.json" {
+				stats.TilesetJSONBytes = info.Size()
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return stats, fmt.Errorf("collect output file statistics: %w", err)
+	}
+	return stats, nil
+}
+
+func mergeTileGenerationStats(report *tilesetGenerationReport, result tileGenerationStats) {
+	if result.queried {
+		if result.hasData {
+			report.LeafTilesWithData++
+		} else {
+			report.LeafTilesWithoutData++
+		}
+	}
+	for level, source := range result.byLOD {
+		var target *lodGenerationStats
+		for index := range report.LOD {
+			if report.LOD[index].LOD == level {
+				target = &report.LOD[index]
+				break
+			}
+		}
+		if target == nil {
+			report.LOD = append(report.LOD, lodGenerationStats{LOD: level})
+			target = &report.LOD[len(report.LOD)-1]
+		}
+		target.ModelGroupsRequested += source.ModelGroupsRequested
+		target.ModelGroupsAvailable += source.ModelGroupsAvailable
+		target.ModelInstancesAvailable += source.ModelInstancesAvailable
+		target.MissingModelGroups += source.MissingModelGroups
+		target.SkippedModelGroups += source.SkippedModelGroups
+		target.TileFilesGenerated += source.TileFilesGenerated
+		target.TileBytesGenerated += source.TileBytesGenerated
+		target.MissingModels = append(target.MissingModels, source.MissingModels...)
+	}
+}
+
 // 生成分片数据
-func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFolder string, boundStr string) (*Tileset, error) {
+func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFolder string, boundStr string) (tilesetResult *Tileset, resultErr error) {
+	started := time.Now()
 	if configName == "" {
 		return nil, fmt.Errorf("configName is empty")
 	}
@@ -474,6 +652,34 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 			return nil, errC
 		}
 	}
+	report := newTilesetGenerationReport(configName, partitionTable, tilesetsFolder, boundStr, started)
+	defer func() {
+		report.CompletedAt = time.Now().Format(time.RFC3339Nano)
+		report.DurationMilliseconds = time.Since(started).Milliseconds()
+		if resultErr != nil {
+			report.Status = "failed"
+			report.Error = resultErr.Error()
+		} else {
+			report.Status = "success"
+		}
+		if files, err := collectOutputFileStats(tilesetsFolder); err == nil {
+			report.Files = files
+		} else if resultErr == nil {
+			resultErr = err
+			report.Status = "failed"
+			report.Error = err.Error()
+		}
+		sortTilesetGenerationReport(report)
+		if err := writeTilesetGenerationReport(tilesetsFolder, report); err != nil {
+			log.Errorf("write tileset generation report failed: %s", err)
+			if resultErr == nil {
+				resultErr = err
+			}
+		} else {
+			log.Infof("✅ tileset generation report written to %s",
+				filepath.Join(tilesetsFolder, tilesetGenerationReportFilename))
+		}
+	}()
 
 	dbc := pg.GetConn(configName)
 	if dbc == nil {
@@ -485,6 +691,7 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	db := dbc.DB
 	// 取所有叶子节点
 	var leafTiles []*GeoHashTile
+	stageStarted := time.Now()
 	err := db.Raw(fmt.Sprintf(`
         SELECT parent.geohash, parent.level, parent.total_count,
 			   ST_XMin(bbox) AS minx,
@@ -505,6 +712,8 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	if err != nil {
 		return nil, err
 	}
+	report.StageMilliseconds["queryLeafTiles"] = time.Since(stageStarted).Milliseconds()
+	report.LeafTilesFound = len(leafTiles)
 
 	// 查找数据配置
 	var geoTable GeoTable
@@ -520,12 +729,26 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	// 收集geohash
 	now := time.Now()
 	lodLevels := configuredTileLODLevels(geoTable.LOD)
+	for _, level := range lodLevels {
+		report.LOD = append(report.LOD, lodGenerationStats{
+			LOD: level.Level, ModelFolder: level.ModelFolder,
+			GeometricError: level.GeometricError,
+		})
+	}
 	geohashErrorBase := geohashGeometricErrorBase(lodLevels)
 	// 构建叶子节点
-	tilesByGeohash, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable, bound)
+	stageStarted = time.Now()
+	tilesByGeohash, jobStats, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable, bound)
+	report.StageMilliseconds["buildLeafTiles"] = time.Since(stageStarted).Milliseconds()
+	for _, stats := range jobStats {
+		mergeTileGenerationStats(report, stats)
+	}
+	report.LeafTilesGenerated = len(tilesByGeohash)
+	report.LeafTilesWithoutOutput = report.LeafTilesFound - report.LeafTilesGenerated
 	if errG != nil {
 		return nil, errG
 	}
+	stageStarted = time.Now()
 
 	parentMap := map[string]*TileNode{}
 	for gh, node := range tilesByGeohash {
@@ -654,16 +877,25 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	}
 	tileset.Asset.Version = "1.1"
 
-	data, _ := json.MarshalIndent(tileset, "", "  ")
+	data, err := json.MarshalIndent(tileset, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal tileset.json: %w", err)
+	}
 	absPath := filepath.Join(tilesetsFolder, "tileset.json")
-	_ = os.WriteFile(absPath, data, 0644)
+	if err := os.WriteFile(absPath, data, 0644); err != nil {
+		return nil, fmt.Errorf("write tileset.json: %w", err)
+	}
+	report.StageMilliseconds["buildHierarchyAndWriteJSON"] = time.Since(stageStarted).Milliseconds()
 
 	// 删除过期的切片文件，保留一段时间以备没有刷新的页面使用的tileset.json还包含老的切片
+	stageStarted = time.Now()
 	if errR := RemoveFilesOlderThan(tilesetsFolder, 3*24*time.Hour); errR != nil {
 		log.Errorf("删除过期文件错误：%s", errR.Error())
+		report.Warnings = append(report.Warnings, fmt.Sprintf("cleanup expired files: %s", errR))
 	} else {
 		log.Infof("✅ 删除过期文件完成 %s", tilesetsFolder)
 	}
+	report.StageMilliseconds["cleanupExpiredFiles"] = time.Since(stageStarted).Milliseconds()
 
 	log.Infof("✅ tileset.json 生成完成 %s", absPath)
 
@@ -724,13 +956,107 @@ func refreshTileBoundWithGeometricError(node *TileNode, geohashErrorBase float64
 	}
 }
 
-func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHashTile, geoTable GeoTable, tilesetsFolder string, partitionTable string, bound projectBound) (map[string]*TileNode, error) {
+func modelInstanceCount(models map[string][]*GeoHashModel) int {
+	count := 0
+	for _, instances := range models {
+		for _, instance := range instances {
+			if instance != nil && instance.Gltf != nil && len(instance.Gltf.Content) > 0 {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func availableModelGroupCount(models map[string][]*GeoHashModel) int {
+	count := 0
+	for _, instances := range models {
+		if modelGroupHasContent(instances) {
+			count++
+		}
+	}
+	return count
+}
+
+func modelGroupHasContent(instances []*GeoHashModel) bool {
+	for _, instance := range instances {
+		if instance != nil && instance.Gltf != nil && len(instance.Gltf.Content) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func recordLODGenerationStats(stats *tileGenerationStats, cfg *config.Config,
+	geoTable GeoTable, geohash string, level tileLODLevel,
+	requested, available map[string][]*GeoHashModel, built *BuildModel) {
+	lodStats := &lodGenerationStats{
+		LOD:                     level.Level,
+		ModelFolder:             level.ModelFolder,
+		GeometricError:          level.GeometricError,
+		ModelGroupsRequested:    len(requested),
+		ModelGroupsAvailable:    availableModelGroupCount(available),
+		ModelInstancesAvailable: modelInstanceCount(available),
+	}
+	if built != nil {
+		lodStats.TileFilesGenerated = 1
+		lodStats.TileBytesGenerated = int64(len(built.Content))
+	}
+	for key, instances := range requested {
+		if len(instances) == 0 || instances[0] == nil {
+			continue
+		}
+		model := instances[0]
+		mode := "lod3"
+		if level.Level < 3 {
+			sourceLOD := config.TilesetSourceLODConfig{}
+			if sourceCfg, ok := geoTable.TilesetSources[model.TableName]; ok {
+				sourceLOD = sourceCfg.LOD
+			}
+			resolvedMode, err := resolveLODModelMode(sourceLOD, level.Level, model.Model)
+			if err != nil {
+				resolvedMode = "configuration-error"
+			}
+			mode = resolvedMode
+		}
+		if mode == "skip" {
+			lodStats.SkippedModelGroups++
+			continue
+		}
+		if availableInstances, ok := available[key]; ok && modelGroupHasContent(availableInstances) {
+			continue
+		}
+		missing := missingModelInfo{
+			LOD: level.Level, Geohash: geohash, TableName: model.TableName,
+			Model: model.Model, ModelMode: mode, Instances: len(instances),
+			Reason: "model content unavailable",
+		}
+		switch mode {
+		case "local":
+			missing.Reason = "local model file not found"
+			if root, err := localLODModelRoot(cfg, level); err == nil {
+				if filename, err := localLODModelPath(root, model.TableName, model.Model, level.Level); err == nil {
+					missing.ExpectedPath = filename
+				}
+			}
+		case "lod3", "reuse-lod3", "copy-lod3":
+			missing.Reason = "LOD3 model content unavailable"
+		case "configuration-error":
+			missing.Reason = "invalid LOD model configuration"
+		}
+		lodStats.MissingModels = append(lodStats.MissingModels, missing)
+		lodStats.MissingModelGroups++
+	}
+	stats.byLOD[level.Level] = lodStats
+}
+
+func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHashTile, geoTable GeoTable, tilesetsFolder string, partitionTable string, bound projectBound) (map[string]*TileNode, []tileGenerationStats, error) {
 	tilesByGeohash := make(map[string]*TileNode)
 	workerCount := 8 // tune this based on CPU / DB capacity
 	cfg := config.Instance()
 	lodLevels := configuredTileLODLevels(geoTable.LOD)
 	if err := ensureLocalLODModelDirectories(cfg, geoTable.LOD, lodLevels); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	localModelCache := &localLODModelCache{models: make(map[string]*GltfModel)}
 
@@ -747,25 +1073,33 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 
 			for j := range jobs {
 				t := j.t
+				tileStats := tileGenerationStats{byLOD: make(map[int]*lodGenerationStats)}
 
 				models, err2 := queryGeoHashModelData(configName, geoTable, db, t.Geohash, "", bound)
 				if err2 != nil {
-					results <- TileJobResult{err: err2}
+					results <- TileJobResult{err: err2, stats: tileStats}
 					continue
 				}
+				tileStats.queried = true
 				if len(models) == 0 {
+					results <- TileJobResult{stats: tileStats}
 					continue
 				}
+				tileStats.hasData = true
 
 				builtLODs := make([]builtTileLOD, 0, len(lodLevels))
+				failed := false
 				for _, lodLevel := range lodLevels {
 					lodModels := models
 					if lodLevel.Level < 3 {
 						lodModels, err2 = loadLODModelsBySource(
 							cfg, geoTable, lodLevel, models, localModelCache)
 						if err2 != nil {
-							results <- TileJobResult{err: err2}
+							recordLODGenerationStats(&tileStats, cfg, geoTable, t.Geohash,
+								lodLevel, models, lodModels, nil)
+							results <- TileJobResult{err: err2, stats: tileStats}
 							builtLODs = nil
+							failed = true
 							break
 						}
 					} else {
@@ -775,18 +1109,29 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 						lodModels = modelsWithGLTFContent(models)
 					}
 					if len(lodModels) == 0 {
+						recordLODGenerationStats(&tileStats, cfg, geoTable, t.Geohash,
+							lodLevel, models, lodModels, nil)
 						continue
 					}
 
 					fn, built, err3 := buildTileByHashModels(lodModels, t, tilesetsFolder, lodLevel.Level)
 					if err3 != nil {
-						results <- TileJobResult{err: fmt.Errorf("build LOD%d tile %s: %w", lodLevel.Level, t.Geohash, err3)}
+						recordLODGenerationStats(&tileStats, cfg, geoTable, t.Geohash,
+							lodLevel, models, lodModels, nil)
+						results <- TileJobResult{err: fmt.Errorf("build LOD%d tile %s: %w", lodLevel.Level, t.Geohash, err3), stats: tileStats}
 						builtLODs = nil
+						failed = true
 						break
 					}
+					recordLODGenerationStats(&tileStats, cfg, geoTable, t.Geohash,
+						lodLevel, models, lodModels, built)
 					builtLODs = append(builtLODs, builtTileLOD{level: lodLevel, uri: fn, built: built})
 				}
+				if failed {
+					continue
+				}
 				if len(builtLODs) == 0 {
+					results <- TileJobResult{stats: tileStats}
 					continue
 				}
 
@@ -795,6 +1140,7 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 				results <- TileJobResult{
 					geohash: t.Geohash,
 					node:    node,
+					stats:   tileStats,
 				}
 			}
 		}()
@@ -815,9 +1161,10 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 	}()
 
 	var firstErr error
-	var mu sync.Mutex
+	jobStats := make([]tileGenerationStats, 0, len(leafTiles))
 
 	for r := range results {
+		jobStats = append(jobStats, r.stats)
 		if r.err != nil {
 			if firstErr == nil {
 				firstErr = r.err
@@ -828,16 +1175,14 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 			continue
 		}
 
-		mu.Lock()
 		tilesByGeohash[r.geohash] = r.node
-		mu.Unlock()
 	}
 
 	if firstErr != nil {
-		return nil, firstErr
+		return tilesByGeohash, jobStats, firstErr
 	}
 
-	return tilesByGeohash, nil
+	return tilesByGeohash, jobStats, nil
 }
 
 // RemoveFilesOlderThan removes files in dir whose ModTime is older than maxAge.
