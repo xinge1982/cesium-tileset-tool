@@ -478,7 +478,7 @@ func UpdateTileByGeoHash(configName string, partitionTable string, tilesetsFolde
 	if errB != nil {
 		return errB
 	}
-	changes, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable, bound)
+	changes, _, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable, bound)
 	if errG != nil {
 		return errG
 	}
@@ -1731,7 +1731,7 @@ func UpdateGeoHashTileByDataLngLats(configName string, partitionTable string, ti
 	if errB != nil {
 		return partitionNeedRefresh, errB
 	}
-	changes, err := doTileJob(db, now, configName, changedTiles, geoTable, tilesetsFolder, partitionTable, bound)
+	changes, _, err := doTileJob(db, now, configName, changedTiles, geoTable, tilesetsFolder, partitionTable, bound)
 	if err != nil {
 		return partitionNeedRefresh, err
 	}
