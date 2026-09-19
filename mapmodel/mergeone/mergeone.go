@@ -1,10 +1,15 @@
 package mergeone
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"math"
+	"strings"
 
 	"github.com/qmuntal/gltf"
 	"github.com/qmuntal/gltf/modeler"
@@ -233,6 +238,65 @@ func NewImageDeduper() *ImageDeduper {
 	return &ImageDeduper{images: make(map[imageHashKey]int)}
 }
 
+const mergedTextureJPEGQuality = 85
+
+func imageHasTransparency(img image.Image) bool {
+	bounds := img.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			_, _, _, alpha := img.At(x, y).RGBA()
+			if alpha != 0xffff {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// reencodeEmbeddedImage keeps the original dimensions. Transparent PNGs stay
+// lossless PNGs; opaque PNGs and JPEGs are candidates for JPEG recompression.
+// The original bytes are retained whenever decoding fails or the candidate is
+// not smaller, so merging cannot increase image payload size.
+func reencodeEmbeddedImage(data []byte, mimeType string) ([]byte, string) {
+	normalizedMIME := strings.ToLower(strings.TrimSpace(mimeType))
+	var (
+		decoded       image.Image
+		candidateMIME string
+		out           bytes.Buffer
+		err           error
+	)
+
+	switch normalizedMIME {
+	case "image/png":
+		decoded, err = png.Decode(bytes.NewReader(data))
+		if err != nil {
+			return data, mimeType
+		}
+		if imageHasTransparency(decoded) {
+			candidateMIME = "image/png"
+			encoder := png.Encoder{CompressionLevel: png.BestCompression}
+			err = encoder.Encode(&out, decoded)
+		} else {
+			candidateMIME = "image/jpeg"
+			err = jpeg.Encode(&out, decoded, &jpeg.Options{Quality: mergedTextureJPEGQuality})
+		}
+	case "image/jpeg", "image/jpg":
+		decoded, err = jpeg.Decode(bytes.NewReader(data))
+		if err != nil {
+			return data, mimeType
+		}
+		candidateMIME = "image/jpeg"
+		err = jpeg.Encode(&out, decoded, &jpeg.Options{Quality: mergedTextureJPEGQuality})
+	default:
+		return data, mimeType
+	}
+
+	if err != nil || out.Len() >= len(data) {
+		return data, mimeType
+	}
+	return out.Bytes(), candidateMIME
+}
+
 func newMatCopier(src, dst *gltf.Document, imageDeduper *ImageDeduper) *matCopier {
 	if imageDeduper == nil {
 		imageDeduper = NewImageDeduper()
@@ -243,10 +307,10 @@ func newMatCopier(src, dst *gltf.Document, imageDeduper *ImageDeduper) *matCopie
 		src:          src,
 		dst:          dst,
 		imageDeduper: imageDeduper,
-		imgMap:     map[int]int{},
-		samplerMap: map[int]int{},
-		texMap:     map[int]int{},
-		matMap:     map[int]int{},
+		imgMap:       map[int]int{},
+		samplerMap:   map[int]int{},
+		texMap:       map[int]int{},
+		matMap:       map[int]int{},
 	}
 }
 
@@ -288,12 +352,23 @@ func (m *matCopier) cloneImage(i int) (int, error) {
 		return -1, fmt.Errorf("image %d mimeType is empty", i)
 	}
 
-	key := imageHashKey{
+	sourceKey := imageHashKey{
 		mimeType: img.MimeType,
 		digest:   sha256.Sum256(data),
 	}
-	if existing, ok := m.imageDeduper.images[key]; ok {
+	if existing, ok := m.imageDeduper.images[sourceKey]; ok {
 		m.imgMap[i] = existing
+		return existing, nil
+	}
+
+	data, outputMIME := reencodeEmbeddedImage(data, img.MimeType)
+	outputKey := imageHashKey{
+		mimeType: outputMIME,
+		digest:   sha256.Sum256(data),
+	}
+	if existing, ok := m.imageDeduper.images[outputKey]; ok {
+		m.imgMap[i] = existing
+		m.imageDeduper.images[sourceKey] = existing
 		return existing, nil
 	}
 
@@ -308,11 +383,13 @@ func (m *matCopier) cloneImage(i int) (int, error) {
 	cp := *img
 	cp.BufferView = gltf.Index(newBV)
 	cp.URI = ""
+	cp.MimeType = outputMIME
 	m.dst.Images = append(m.dst.Images, &cp)
 
 	newIdx := len(m.dst.Images) - 1
 	m.imgMap[i] = newIdx
-	m.imageDeduper.images[key] = newIdx
+	m.imageDeduper.images[sourceKey] = newIdx
+	m.imageDeduper.images[outputKey] = newIdx
 	return newIdx, nil
 }
 
