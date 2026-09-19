@@ -96,7 +96,10 @@ func (bm *BuildModels) mergeGlb(model *Model, fidx int) error {
 	}
 	sn.Name = strconv.Itoa(fidx)
 
-	_, _, err := mergeone.AppendDocBFlattenedIntoDocA(bm.doc, model.Doc, sn, mergeone.MergeOptions{Fidx: f})
+	_, _, err := mergeone.AppendDocBFlattenedIntoDocA(bm.doc, model.Doc, sn, mergeone.MergeOptions{
+		Fidx:         f,
+		ImageDeduper: bm.imageDeduper,
+	})
 
 	return err
 }

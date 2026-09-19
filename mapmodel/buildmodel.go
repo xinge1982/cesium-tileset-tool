@@ -3,6 +3,7 @@ package mapmodel
 import (
 	"bytes"
 	"cesium-tileset-tool/mapmodel/aabb"
+	"cesium-tileset-tool/mapmodel/mergeone"
 	"cesium-tileset-tool/mapmodel/transform"
 	"encoding/binary"
 	"fmt"
@@ -35,6 +36,9 @@ type BuildModels struct {
 	centerENU  *aabb.ENUFrame //ECEF 原点坐标
 	scenesNode []*gltf.Node
 	opt        *BmOption
+	// imageDeduper is scoped to one output tile and reuses identical images
+	// embedded by different source GLBs.
+	imageDeduper *mergeone.ImageDeduper
 }
 
 // NewBuildModels 新建BuildModels,一定要做
@@ -49,6 +53,7 @@ func NewBuildModels(center []float64, region [4]float64, opt ...*BmOption) (*Bui
 	bm.fields = make(map[string][]string)
 	bm.aabb = aabb.NewEmptyBox()
 	bm.doc = gltf.NewDocument()
+	bm.imageDeduper = mergeone.NewImageDeduper()
 	bm.doc.Asset.Generator = "mapabc/gltf"
 	bm.region = aabb.WGS84BoxToRegionDegBuf(region[0], region[1], region[2], region[3], 0, 100)
 

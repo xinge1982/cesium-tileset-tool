@@ -1,6 +1,7 @@
 package mergeone
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -214,11 +215,34 @@ type matCopier struct {
 	src, dst           *gltf.Document
 	imgMap, samplerMap map[int]int
 	texMap, matMap     map[int]int
+	imageDeduper       *ImageDeduper
 }
 
-func newMatCopier(src, dst *gltf.Document) *matCopier {
+type imageHashKey struct {
+	mimeType string
+	digest   [sha256.Size]byte
+}
+
+// ImageDeduper keeps an output-document-wide index of embedded image content.
+// It is owned by one BuildModels instance, so no image state leaks between tiles.
+type ImageDeduper struct {
+	images map[imageHashKey]int
+}
+
+func NewImageDeduper() *ImageDeduper {
+	return &ImageDeduper{images: make(map[imageHashKey]int)}
+}
+
+func newMatCopier(src, dst *gltf.Document, imageDeduper *ImageDeduper) *matCopier {
+	if imageDeduper == nil {
+		imageDeduper = NewImageDeduper()
+	} else if imageDeduper.images == nil {
+		imageDeduper.images = make(map[imageHashKey]int)
+	}
 	return &matCopier{
-		src: src, dst: dst,
+		src:          src,
+		dst:          dst,
+		imageDeduper: imageDeduper,
 		imgMap:     map[int]int{},
 		samplerMap: map[int]int{},
 		texMap:     map[int]int{},
@@ -264,6 +288,15 @@ func (m *matCopier) cloneImage(i int) (int, error) {
 		return -1, fmt.Errorf("image %d mimeType is empty", i)
 	}
 
+	key := imageHashKey{
+		mimeType: img.MimeType,
+		digest:   sha256.Sum256(data),
+	}
+	if existing, ok := m.imageDeduper.images[key]; ok {
+		m.imgMap[i] = existing
+		return existing, nil
+	}
+
 	bufIdx, off := appendBytesAligned(m.dst, data)
 	m.dst.BufferViews = append(m.dst.BufferViews, &gltf.BufferView{
 		Buffer:     bufIdx,
@@ -279,6 +312,7 @@ func (m *matCopier) cloneImage(i int) (int, error) {
 
 	newIdx := len(m.dst.Images) - 1
 	m.imgMap[i] = newIdx
+	m.imageDeduper.images[key] = newIdx
 	return newIdx, nil
 }
 
@@ -515,8 +549,9 @@ func attachFeatureID(dst *gltf.Document, np *gltf.Primitive, vertexCount int, fi
 
 /*** -------------- 核心：把所有 Mesh 合到一个 Mesh，再挂一个 Node -------------- ***/
 type MergeOptions struct {
-	SkipSkinned bool
-	Fidx        int
+	SkipSkinned  bool
+	Fidx         int
+	ImageDeduper *ImageDeduper
 }
 
 func MergeAllToSingleMeshNode(src *gltf.Document, opt MergeOptions) (*gltf.Document, error) {
@@ -531,7 +566,7 @@ func MergeAllToSingleMeshNode(src *gltf.Document, opt MergeOptions) (*gltf.Docum
 	}
 
 	world := computeWorldMatrices(src)
-	mc := newMatCopier(src, dst)
+	mc := newMatCopier(src, dst, opt.ImageDeduper)
 	rawCtx := newRawCloneContext(src, dst)
 	ensureSingleBuffer(dst)
 
@@ -648,12 +683,16 @@ func MergeTwoToSingleMeshNode(docA, docB *gltf.Document, opt MergeOptions) (*glt
 		mergeExtDecl(dst, docB)
 	}
 	ensureSingleBuffer(dst)
+	imageDeduper := opt.ImageDeduper
+	if imageDeduper == nil {
+		imageDeduper = NewImageDeduper()
+	}
 
 	outMesh := &gltf.Mesh{Name: "Merged"}
 
 	appendFrom := func(src *gltf.Document, label string) error {
 		world := computeWorldMatrices(src)
-		mc := newMatCopier(src, dst)
+		mc := newMatCopier(src, dst, imageDeduper)
 		rawCtx := newRawCloneContext(src, dst)
 
 		for ni, nd := range src.Nodes {
@@ -779,7 +818,7 @@ func AppendDocBFlattenedIntoDocA(docA, docB *gltf.Document, newNode *gltf.Node, 
 	ensureSingleBuffer(docA)
 
 	worldB := computeWorldMatrices(docB)
-	mc := newMatCopier(docB, docA)
+	mc := newMatCopier(docB, docA, opt.ImageDeduper)
 	rawCtx := newRawCloneContext(docB, docA)
 
 	outMesh := &gltf.Mesh{Name: fmt.Sprintf("mesh-%d", opt.Fidx)}
