@@ -205,6 +205,11 @@ type localLODModelCache struct {
 	models map[string]*GltfModel
 }
 
+// copy-lod3 may write the same shared source model from multiple tile workers.
+// The model byte cache is intentionally tile-scoped, so file writes need their
+// own process-wide lock to remain safe without retaining model contents.
+var localLODModelFileWriteLock sync.Mutex
+
 const tileModelRootDir = "tiles"
 
 const (
@@ -1252,8 +1257,6 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 	if err := ensureLocalLODModelDirectories(cfg, geoTable.LOD, lodLevels); err != nil {
 		return nil, nil, err
 	}
-	localModelCache := &localLODModelCache{models: make(map[string]*GltfModel)}
-
 	jobs := make(chan TileJob)
 	results := make(chan TileJobResult)
 
@@ -1267,6 +1270,10 @@ func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHa
 
 			for j := range jobs {
 				t := j.t
+				// Keep decoded/source model bytes only for the current geohash tile.
+				// Once this iteration finishes no long-lived cache references remain,
+				// allowing the GC to reclaim them before the full province is built.
+				localModelCache := &localLODModelCache{models: make(map[string]*GltfModel)}
 				tileStats := tileGenerationStats{byLOD: make(map[int]*lodGenerationStats)}
 
 				models, err2 := queryGeoHashModelData(configName, geoTable, db, t.Geohash, "", bound)
@@ -1598,17 +1605,23 @@ func copyLOD3ModelsToLocalLOD(cfg *config.Config, level tileLODLevel,
 	}
 
 	cache.Lock()
-	defer cache.Unlock()
 	if _, cached := cache.models[modelPath]; cached {
+		cache.Unlock()
 		return nil
 	}
+	cache.Unlock()
+
+	localLODModelFileWriteLock.Lock()
+	defer localLODModelFileWriteLock.Unlock()
 	if err := os.MkdirAll(filepath.Dir(modelPath), 0755); err != nil {
 		return fmt.Errorf("create LOD%d model directory %s: %w", level.Level, filepath.Dir(modelPath), err)
 	}
 	if err := os.WriteFile(modelPath, model.Gltf.Content, 0644); err != nil {
 		return fmt.Errorf("write LOD%d model %s: %w", level.Level, modelPath, err)
 	}
+	cache.Lock()
 	cache.models[modelPath] = model.Gltf
+	cache.Unlock()
 	return nil
 }
 
