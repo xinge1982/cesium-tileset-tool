@@ -78,6 +78,7 @@ func geohashIntersectsBound(hash string, bound projectBound) bool {
 
 type GeoTable struct {
 	PartitionTableName string
+	TilesetSplitLevel  int
 	GeoTableNames      []string
 	Threshold          int
 	TilesetSources     map[string]config.TilesetSourceConfig

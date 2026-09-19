@@ -148,11 +148,13 @@ type lodGenerationStats struct {
 }
 
 type outputFileStats struct {
-	TilesetJSONBytes int64 `json:"tilesetJsonBytes"`
-	GLBFiles         int   `json:"glbFiles"`
-	GLBBytes         int64 `json:"glbBytes"`
-	TotalFiles       int   `json:"totalFiles"`
-	TotalBytes       int64 `json:"totalBytes"`
+	TilesetJSONBytes         int64 `json:"tilesetJsonBytes"`
+	ExternalTilesetJSONFiles int   `json:"externalTilesetJsonFiles"`
+	ExternalTilesetJSONBytes int64 `json:"externalTilesetJsonBytes"`
+	GLBFiles                 int   `json:"glbFiles"`
+	GLBBytes                 int64 `json:"glbBytes"`
+	TotalFiles               int   `json:"totalFiles"`
+	TotalBytes               int64 `json:"totalBytes"`
 }
 
 type tilesetGenerationReport struct {
@@ -174,6 +176,8 @@ type tilesetGenerationReport struct {
 	LeafTilesWithoutData   int                  `json:"leafTilesWithoutData"`
 	LeafTilesGenerated     int                  `json:"leafTilesGenerated"`
 	LeafTilesWithoutOutput int                  `json:"leafTilesWithoutOutput"`
+	TilesetSplitLevel      int                  `json:"tilesetSplitLevel"`
+	ExternalTilesets       int                  `json:"externalTilesets"`
 	LOD                    []lodGenerationStats `json:"lod"`
 	Files                  outputFileStats      `json:"files"`
 }
@@ -203,6 +207,11 @@ type localLODModelCache struct {
 
 const tileModelRootDir = "tiles"
 
+const (
+	externalTilesetRootDir   = "subtilesets"
+	defaultTilesetSplitLevel = 5
+)
+
 // Each Geohash parent covers a larger area than its children. Keeping its
 // error strictly larger prevents several spatial levels from being refined at
 // the same SSE threshold. The first configured positive LOD error is used as
@@ -231,6 +240,115 @@ func tileModelRelativePath(geohash string, lod int) string {
 	}
 	parts = append(parts, geohash, fmt.Sprintf("lod%d.glb", lod))
 	return path.Join(parts...)
+}
+
+func externalTilesetRelativePath(geohash string) string {
+	parts := []string{externalTilesetRootDir}
+	prefixLength := len(geohash) - 2
+	for start := 0; start < prefixLength; start += 2 {
+		end := start + 2
+		if end > prefixLength {
+			end = prefixLength
+		}
+		parts = append(parts, geohash[:end])
+	}
+	parts = append(parts, geohash, "tileset.json")
+	return path.Join(parts...)
+}
+
+func effectiveTilesetSplitLevel(configured int) int {
+	if configured <= 0 {
+		return defaultTilesetSplitLevel
+	}
+	if configured < int(MIN_GEOHASH_LEVEL) {
+		return int(MIN_GEOHASH_LEVEL)
+	}
+	if configured > int(MAX_GEOHASH_LEVEL) {
+		return int(MAX_GEOHASH_LEVEL)
+	}
+	return configured
+}
+
+func applyTileNodeChange(node, change *TileNode, inheritedTransform bool) {
+	bound := change.BoundingVolume
+	if change.Transform != nil {
+		bound.Box = cesium.WorldBoxToLocalBox(bound.Box, *change.Transform)
+	}
+	node.BoundingVolume = bound
+	node.Children = change.Children
+	if inheritedTransform {
+		node.Transform = nil
+	} else {
+		node.Transform = change.Transform
+	}
+	node.Content = change.Content
+	node.GeometricError = change.GeometricError
+	node.Refine = change.Refine
+}
+
+func updateSplitTilesetNodes(rootTileset *Tileset, changes map[string]*TileNode,
+	outputDirectory string, splitLevel int, updateTime time.Time) error {
+	type loadedTileset struct {
+		filename string
+		tileset  *Tileset
+	}
+	documents := make(map[string]*loadedTileset)
+
+	for geohash, change := range changes {
+		target := rootTileset
+		filename := ""
+		external := false
+		splitHash := ""
+		if len(geohash) >= splitLevel {
+			splitHash = geohash[:splitLevel]
+			filename = filepath.Join(outputDirectory,
+				filepath.FromSlash(externalTilesetRelativePath(splitHash)))
+			if _, err := os.Stat(filename); err == nil {
+				external = true
+				if document := documents[filename]; document != nil {
+					target = document.tileset
+				} else {
+					data, err := os.ReadFile(filename)
+					if err != nil {
+						return fmt.Errorf("read external tileset %s: %w", filename, err)
+					}
+					target = &Tileset{}
+					if err := json.Unmarshal(data, target); err != nil {
+						return fmt.Errorf("parse external tileset %s: %w", filename, err)
+					}
+					documents[filename] = &loadedTileset{filename: filename, tileset: target}
+				}
+			}
+		}
+
+		node := FindTileNodeByGeohash(target.Root, geohash)
+		if node == nil {
+			return fmt.Errorf("no tile with geohash %s", geohash)
+		}
+		if external {
+			rootPrefix, err := filepath.Rel(filepath.Dir(filename), outputDirectory)
+			if err != nil {
+				return fmt.Errorf("resolve external tileset root path: %w", err)
+			}
+			rebaseTileContentURIs(change, filepath.ToSlash(rootPrefix))
+		}
+		applyTileNodeChange(node, change, external && geohash == splitHash)
+	}
+
+	for _, document := range documents {
+		if document.tileset.Extensions.ThreeDTILESMetadata.Schema.Classes.TilesetInfo.Properties.UpdateTime != nil {
+			document.tileset.Extensions.ThreeDTILESMetadata.Tilesets.Main.Properties.UpdateTime =
+				updateTime.Format("20060102150405")
+		}
+		data, err := json.MarshalIndent(document.tileset, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal external tileset %s: %w", document.filename, err)
+		}
+		if err := os.WriteFile(document.filename, data, 0644); err != nil {
+			return fmt.Errorf("write external tileset %s: %w", document.filename, err)
+		}
+	}
+	return nil
 }
 
 func configuredTileLODLevels(lod config.TilesetLODConfig) []tileLODLevel {
@@ -495,22 +613,9 @@ func UpdateTileByGeoHash(configName string, partitionTable string, tilesetsFolde
 		return err
 	}
 
-	for _, change := range changes {
-		node := FindTileNodeByGeohash(tileset.Root, change.Geohash)
-		if node != nil {
-			bound := change.BoundingVolume
-			if change.Transform != nil {
-				bound.Box = cesium.WorldBoxToLocalBox(bound.Box, *change.Transform)
-			}
-			node.BoundingVolume = bound
-			node.Children = change.Children
-			node.Transform = change.Transform
-			node.Content = change.Content
-			node.GeometricError = change.GeometricError
-			node.Refine = change.Refine
-		} else {
-			return fmt.Errorf("no tile with geohash %s in %s", change.Geohash, configName)
-		}
+	if err := updateSplitTilesetNodes(&tileset, changes, tilesetsFolder,
+		effectiveTilesetSplitLevel(geoTable.TilesetSplitLevel), now); err != nil {
+		return fmt.Errorf("update tileset nodes in %s: %w", configName, err)
 	}
 
 	if tileset.Extensions.ThreeDTILESMetadata.Schema.Classes.TilesetInfo.Properties.UpdateTime != nil {
@@ -592,8 +697,12 @@ func collectOutputFileStats(folder string) (outputFileStats, error) {
 			stats.GLBFiles++
 			stats.GLBBytes += info.Size()
 		case ".json":
-			if entry.Name() == "tileset.json" {
+			relativeName, relErr := filepath.Rel(folder, filename)
+			if relErr == nil && relativeName == "tileset.json" {
 				stats.TilesetJSONBytes = info.Size()
+			} else if relErr == nil && strings.HasPrefix(filepath.ToSlash(relativeName), externalTilesetRootDir+"/") {
+				stats.ExternalTilesetJSONFiles++
+				stats.ExternalTilesetJSONBytes += info.Size()
 			}
 		}
 		return nil
@@ -633,6 +742,84 @@ func mergeTileGenerationStats(report *tilesetGenerationReport, result tileGenera
 		target.TileBytesGenerated += source.TileBytesGenerated
 		target.MissingModels = append(target.MissingModels, source.MissingModels...)
 	}
+}
+
+func rebaseTileContentURIs(node *TileNode, prefix string) {
+	if node == nil {
+		return
+	}
+	if node.Content != nil && node.Content.Uri != "" {
+		parsed, err := url.Parse(node.Content.Uri)
+		if err == nil && parsed.Scheme == "" && !strings.HasPrefix(parsed.Path, "/") {
+			parsed.Path = path.Join(prefix, parsed.Path)
+			node.Content.Uri = parsed.String()
+		}
+	}
+	for _, child := range node.Children {
+		rebaseTileContentURIs(child, prefix)
+	}
+}
+
+func writeExternalTilesets(tileset *Tileset, outputDirectory string, splitLevel int, timestamp string) (int, error) {
+	if tileset == nil || tileset.Root == nil {
+		return 0, nil
+	}
+	count := 0
+	var splitChildren func(*TileNode) error
+	splitChildren = func(parent *TileNode) error {
+		for index, child := range parent.Children {
+			if child == nil {
+				continue
+			}
+			if child.Level == splitLevel && child.Geohash != "" && !strings.Contains(child.Geohash, "#") {
+				relativePath := externalTilesetRelativePath(child.Geohash)
+				absolutePath := filepath.Join(outputDirectory, filepath.FromSlash(relativePath))
+				if err := os.MkdirAll(filepath.Dir(absolutePath), 0755); err != nil {
+					return fmt.Errorf("create external tileset directory: %w", err)
+				}
+				rootPrefix, err := filepath.Rel(filepath.Dir(absolutePath), outputDirectory)
+				if err != nil {
+					return fmt.Errorf("resolve external tileset root path: %w", err)
+				}
+				placeholderTransform := child.Transform
+				child.Transform = nil
+				rebaseTileContentURIs(child, filepath.ToSlash(rootPrefix))
+
+				externalTileset := *tileset
+				externalTileset.GeometricError = child.GeometricError
+				externalTileset.Root = child
+				data, err := json.MarshalIndent(&externalTileset, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshal external tileset %s: %w", child.Geohash, err)
+				}
+				if err := os.WriteFile(absolutePath, data, 0644); err != nil {
+					return fmt.Errorf("write external tileset %s: %w", absolutePath, err)
+				}
+
+				parent.Children[index] = &TileNode{
+					BoundingVolume: child.BoundingVolume,
+					Content: &TileContent{Uri: fmt.Sprintf(
+						"%s?t=%s", relativePath, timestamp)},
+					GeometricError: child.GeometricError,
+					Transform:      placeholderTransform,
+					Refine:         child.Refine,
+					Level:          child.Level,
+					Geohash:        child.Geohash,
+				}
+				count++
+				continue
+			}
+			if err := splitChildren(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if err := splitChildren(tileset.Root); err != nil {
+		return count, err
+	}
+	return count, nil
 }
 
 // 生成分片数据
@@ -736,6 +923,8 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 		})
 	}
 	geohashErrorBase := geohashGeometricErrorBase(lodLevels)
+	splitLevel := effectiveTilesetSplitLevel(geoTable.TilesetSplitLevel)
+	report.TilesetSplitLevel = splitLevel
 	// 构建叶子节点
 	stageStarted = time.Now()
 	tilesByGeohash, jobStats, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable, bound)
@@ -876,6 +1065,11 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 		}},
 	}
 	tileset.Asset.Version = "1.1"
+	report.ExternalTilesets, err = writeExternalTilesets(
+		tileset, tilesetsFolder, splitLevel, now.Format("20060102150405"))
+	if err != nil {
+		return nil, err
+	}
 
 	data, err := json.MarshalIndent(tileset, "", "  ")
 	if err != nil {
@@ -1747,20 +1941,9 @@ func UpdateGeoHashTileByDataLngLats(configName string, partitionTable string, ti
 	if err != nil {
 		return partitionNeedRefresh, err
 	}
-	for geohash, change := range changes {
-		node := FindTileNodeByGeohash(tileset.Root, geohash)
-		if node != nil {
-			bound := change.BoundingVolume
-			if change.Transform != nil {
-				bound.Box = cesium.WorldBoxToLocalBox(bound.Box, *change.Transform)
-			}
-			node.BoundingVolume = bound
-			node.Content = change.Content
-			node.GeometricError = change.GeometricError
-			node.Transform = change.Transform
-			node.Refine = change.Refine
-			node.Children = change.Children
-		}
+	if err := updateSplitTilesetNodes(&tileset, changes, tilesetsFolder,
+		effectiveTilesetSplitLevel(geoTable.TilesetSplitLevel), now); err != nil {
+		return partitionNeedRefresh, err
 	}
 	if tileset.Extensions.ThreeDTILESMetadata.Schema.Classes.TilesetInfo.Properties.UpdateTime != nil {
 		tileset.Extensions.ThreeDTILESMetadata.Tilesets.Main.Properties.UpdateTime = now.Format("20060102150405")

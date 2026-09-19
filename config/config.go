@@ -303,7 +303,8 @@ type BoundingVolumeConfig struct {
 }
 
 type Partition struct {
-	Table string `yaml:"table" json:"table"`
+	Table      string `yaml:"table" json:"table"`
+	SplitLevel int    `yaml:"splitLevel" json:"splitLevel"`
 }
 
 type ZClipConfig struct {

@@ -1,6 +1,7 @@
 package traffic_feature
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -247,6 +248,63 @@ func TestBuildLODNodeChain(t *testing.T) {
 	}
 	if leaf.Refine != "REPLACE" || leaf.GeometricError != 0 || leaf.Transform != nil {
 		t.Fatal("deepest available LOD must be a zero-error leaf inheriting its transform")
+	}
+}
+
+func TestWriteExternalTilesetsSplitsAtConfiguredGeohashLevel(t *testing.T) {
+	output := t.TempDir()
+	transform := [16]float64{1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 10, 20, 30, 1}
+	leaf := &TileNode{
+		BoundingVolume: BoundingVolume{Box: [12]float64{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}},
+		Content:        &TileContent{Uri: "tiles/wt/wtw/wtwj1/lod0.glb?t=1"},
+		GeometricError: 100,
+		Transform:      &transform,
+		Refine:         "REPLACE",
+		Level:          5,
+		Geohash:        "wtwj1",
+	}
+	root := &TileNode{
+		BoundingVolume: BoundingVolume{Box: leaf.BoundingVolume.Box},
+		Children:       []*TileNode{leaf},
+		GeometricError: 200,
+		Refine:         "ADD",
+		Level:          2,
+		Geohash:        "root",
+	}
+	tileset := &Tileset{Root: root, GeometricError: root.GeometricError}
+	tileset.Asset.Version = "1.1"
+
+	count, err := writeExternalTilesets(tileset, output, 5, "20260919")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("external tileset count = %d, want 1", count)
+	}
+	placeholder := tileset.Root.Children[0]
+	if placeholder.Content == nil || placeholder.Content.Uri != "subtilesets/wt/wtw/wtwj1/tileset.json?t=20260919" {
+		t.Fatalf("unexpected external tileset reference: %+v", placeholder.Content)
+	}
+	if placeholder.Transform == nil || len(placeholder.Children) != 0 {
+		t.Fatal("external tileset placeholder did not preserve transform or still contains children")
+	}
+
+	data, err := os.ReadFile(filepath.Join(output, "subtilesets", "wt", "wtw", "wtwj1", "tileset.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var external Tileset
+	if err := json.Unmarshal(data, &external); err != nil {
+		t.Fatal(err)
+	}
+	if external.Root == nil || external.Root.Content == nil {
+		t.Fatal("external tileset root content is missing")
+	}
+	if external.Root.Content.Uri != "../../../../tiles/wt/wtw/wtwj1/lod0.glb?t=1" {
+		t.Fatalf("external GLB URI was not rebased: %s", external.Root.Content.Uri)
+	}
+	if external.Root.Transform != nil {
+		t.Fatal("external root transform must be inherited from its placeholder")
 	}
 }
 
