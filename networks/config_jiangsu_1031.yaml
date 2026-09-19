@@ -342,7 +342,7 @@ Tilesets:
 
         lod:
           lod0ModelMode: skip
-          lod1ModelMode: skip
+          lod1ModelMode: local
           lod2ModelMode: copy-lod3
 
         match:

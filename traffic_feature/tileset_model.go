@@ -168,7 +168,7 @@ type tilesetGenerationReport struct {
 	StartedAt              string               `json:"startedAt"`
 	CompletedAt            string               `json:"completedAt"`
 	DurationMilliseconds   int64                `json:"durationMilliseconds"`
-	StageMilliseconds      map[string]int64      `json:"stageMilliseconds"`
+	StageMilliseconds      map[string]int64     `json:"stageMilliseconds"`
 	LeafTilesFound         int                  `json:"leafTilesFound"`
 	LeafTilesWithData      int                  `json:"leafTilesWithData"`
 	LeafTilesWithoutData   int                  `json:"leafTilesWithoutData"`
@@ -1842,10 +1842,12 @@ func QueryQbbsByGeohashBBox(configName string, db *gorm.DB, geohash string, boun
 		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, 
 		       dev.transform, dev.obj_angle
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+		  AND (dev.model like '%%glb' or dev.model like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, QbbTileTableName, QbbTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&qbbs).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&qbbs).Error
 	if err != nil {
 		return nil, err
 	}
@@ -1868,10 +1870,12 @@ func QueryDevicesSfzByGeohashBBox(configName string, db *gorm.DB, geohash string
 		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, 
 		       dev.transform, dev.obj_angle
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+		  AND (dev.model like '%%glb' or dev.model like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, DeviceSfzTileTableName, DeviceSfzTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -1894,10 +1898,12 @@ func QueryDevicesFwqByGeohashBBox(configName string, db *gorm.DB, geohash string
 		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, 
 		       dev.transform, dev.obj_angle
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+		  AND (dev.model like '%%glb' or dev.model like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, DeviceFwqTileTableName, DeviceFwqTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -1921,10 +1927,12 @@ func QueryDevicesByGeohashBBox(configName string, db *gorm.DB, geohash string, b
 		       dev.transform, dev.obj_angle, edit.metadata, edit.service_data
 		FROM %s dev
 		LEFT JOIN %s edit on edit.id::text = dev.id::text  and edit.device_table = '%s'
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+		  AND (dev.model like '%%glb' or dev.model like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, DeviceTileTableName, DeviceTileTableName, DeviceEdit{}.TableName(), DeviceTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2015,10 +2023,12 @@ func QuerySignsByGeohashBBox(configName string, db *gorm.DB, geohash string, bou
 			SELECT ST_ClosestPoint(r.line_geom, dev.geom) AS proj_pt
 			WHERE r.line_geom IS NOT NULL
 		) cp ON TRUE
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+		  AND (dev.model like '%%glb' or dev.model like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, SignTileTableName, SignTileTableName, SignEdit{}.TableName(), SignTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2042,10 +2052,12 @@ func QueryPolesByGeohashBBox(configName string, db *gorm.DB, geohash string, bou
 		       dev.transform, dev.obj_angle, edit.service_data
 		FROM %s dev
 		LEFT JOIN %s edit on edit.id::text = dev.id::text and edit.pole_table = '%s'
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+		  AND (dev.model like '%%glb' or dev.model like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, PoleTileTableName, PoleTileTableName, PoleEdit{}.TableName(), PoleTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2069,10 +2081,12 @@ func QueryGantrysByGeohashBBox(configName string, db *gorm.DB, geohash string, b
 		       dev.transform, dev.obj_angle, edit.service_data
 		FROM %s dev
 		LEFT JOIN %s edit on edit.id::text = dev.id::text and edit.gantry_table = '%s'
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+		  AND (dev.model like '%%glb' or dev.model like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, GantryTileTableName, GantryTileTableName, GantryEdit{}.TableName(), GantryTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2095,10 +2109,12 @@ func QueryBridgesByGeohashBBox(configName string, db *gorm.DB, geohash string, b
 		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, 
 		       dev.transform, dev.obj_angle
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+		  AND (dev.model like '%%glb' or dev.model like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, BridgeTileTableName, BridgeTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2136,10 +2152,11 @@ func QueryRoadSideFacilityByGeohashBBox(configName string, db *gorm.DB, geohash 
 				   ) / 2.0 as alt,
 			   id::text || '.glb' as model
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? 
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, RoadSideFacilityTileTableName, RoadSideFacilityTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2171,10 +2188,12 @@ func QueryServiceEquAreaByGeohashBBox(configName string, db *gorm.DB, geohash st
 				   ) / 2.0 as alt,
 			   id::text || '.glb' as model
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? AND dev.type not in ('2')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+		  AND dev.type not in ('2')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, ServiceEquAreaTileTableName, ServiceEquAreaTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2206,10 +2225,11 @@ func QueryServiceAreasByGeohashBBox(configName string, db *gorm.DB, geohash stri
 				   ) / 2.0 as alt,
 			   fid::text || '.glb' as model
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? 
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, ServiceAreasTileTableName, ServiceAreasTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2240,10 +2260,12 @@ func QueryBillboardsByGeohashBBox(configName string, db *gorm.DB, geohash string
 		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
 		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, dev.obj_angle
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model_name like '%%glb' or dev.model_name like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+  		  AND (dev.model_name like '%%glb' or dev.model_name like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, BillboardsTileTableName, BillboardsTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2266,10 +2288,12 @@ func QueryRenderTollBuildingsByGeohashBBox(configName string, db *gorm.DB, geoha
 		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
 		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, height
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+  		  AND (dev.model like '%%glb' or dev.model like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, RenderTollBuildingTileTableName, RenderTollBuildingTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2320,10 +2344,12 @@ func QueryRenderUprightByGeohashBBox(configName string, db *gorm.DB, geohash str
 		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
 		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, dev.transform
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model like '%%glb' or dev.model like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+  		  AND (dev.model like '%%glb' or dev.model like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, RenderUprightTileTableName, RenderUprightTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2346,10 +2372,11 @@ func QueryTollNamesByGeohashBBox(configName string, db *gorm.DB, geohash string,
 		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt,
 			   id::text || '.glb' as model, mod((angle + 180.0)::numeric, 360.0) as obj_angle
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? 
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, TollNameTileTableName, TollNameTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}
@@ -2376,10 +2403,12 @@ func QueryLittlePolesByGeohashBBox(configName string, db *gorm.DB, geohash strin
 		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
 		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, dev.obj_angle, dev.transform
 		FROM %s dev
-		WHERE ST_GeoHash(dev.geom, ?) LIKE ? and (dev.model_name like '%%glb' or dev.model_name like '%%gltf')
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+  		  AND (dev.model_name like '%%glb' or dev.model_name like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, LittlePolesTileTableName, LittlePolesTileTableName),
-		append([]interface{}{len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
 	}

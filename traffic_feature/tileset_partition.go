@@ -733,27 +733,49 @@ func UpdatePartitionCount(db *gorm.DB, geoTables []string, tableName string, par
 		if !hasColumnModel {
 			// 统计表数据
 			result := db.Raw(fmt.Sprintf(`
-				SELECT ST_GeoHash(geom, ?) AS geohash,
-					   COUNT(*) AS count
-				FROM %s
-				WHERE ST_GeoHash(geom, ?) LIKE ?
-				  AND ST_Intersects(ST_Transform(geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
-				GROUP BY geohash
-			`, table), append([]interface{}{level, level, parentHash + "%"}, bound.args()...)...).Scan(&counts)
+					SELECT ST_GeoHash(geom, ?) AS geohash,
+						   COUNT(*) AS count
+					FROM %s
+					WHERE geom && ST_GeomFromGeoHash(?)
+					  AND ST_GeoHash(geom, ?) LIKE ?
+					  AND geom && ST_MakeEnvelope(?, ?, ?, ?, 4326)
+					GROUP BY 1
+				`, table),
+				level,
+				parentHash,
+				level,
+				parentHash+"%",
+				bound.MinLng,
+				bound.MinLat,
+				bound.MaxLng,
+				bound.MaxLat,
+			).Scan(&counts)
+
 			if result.Error != nil {
 				return result.Error
 			}
 		} else {
 			// 统计表数据
 			result := db.Raw(fmt.Sprintf(`
-				SELECT ST_GeoHash(geom, ?) AS geohash,
-					   COUNT(*) AS count
-				FROM %s
-				WHERE ST_GeoHash(geom, ?) LIKE ?
-				  AND (model like '%%glb' or model like '%%gltf')
-				  AND ST_Intersects(ST_Transform(geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
-				GROUP BY geohash
-			`, table), append([]interface{}{level, level, parentHash + "%"}, bound.args()...)...).Scan(&counts)
+					SELECT ST_GeoHash(geom, ?) AS geohash,
+						   COUNT(*) AS count
+					FROM %s
+					WHERE geom && ST_GeomFromGeoHash(?)
+					  AND ST_GeoHash(geom, ?) LIKE ?
+					  AND geom && ST_MakeEnvelope(?, ?, ?, ?, 4326)
+					  AND (model like '%%glb' or model like '%%gltf')
+					GROUP BY 1
+				`, table),
+				level,
+				parentHash,
+				level,
+				parentHash+"%",
+				bound.MinLng,
+				bound.MinLat,
+				bound.MaxLng,
+				bound.MaxLat,
+			).Scan(&counts)
+
 			if result.Error != nil {
 				return result.Error
 			}
