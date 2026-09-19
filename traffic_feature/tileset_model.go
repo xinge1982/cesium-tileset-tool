@@ -2712,14 +2712,14 @@ func getModelContentFromMinio(db *gorm.DB, cfgName string, devices []*GeoHashMod
 		object, errG := client.GetObject(context.Background(), bucketName, objectName)
 
 		var content []byte
-		var errO error
 		// 读取对象内容
 		if errG != nil {
-			log.Errorf("Failed to read object content: %s/%s %v", bucketName, objectName, errO)
+			log.Errorf("Failed to get object content: %s/%s %s/%s %v", bucketName, objectName, device.TableName, device.Model, errG)
 		} else {
+			var errO error
 			content, errO = io.ReadAll(object)
 			if errO != nil {
-				log.Errorf("Failed to read object content: %s/%s %v", bucketName, objectName, errO)
+				log.Errorf("Failed to read object content: %s/%s %s/%s %v", bucketName, objectName, device.TableName, device.Model, errO)
 			}
 			_ = object.Close()
 		}

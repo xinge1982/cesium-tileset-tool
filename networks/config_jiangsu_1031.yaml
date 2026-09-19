@@ -245,7 +245,7 @@ Tilesets:
             - sft_
             - etc_
             - cxjcq_
-          lod2UnmatchedMode: local
+          lod2UnmatchedMode: locale
 
         match:
           operator: prefix
