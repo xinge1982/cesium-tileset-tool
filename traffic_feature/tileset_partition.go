@@ -3,8 +3,11 @@ package traffic_feature
 import (
 	"cesium-tileset-tool/config"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +87,52 @@ type GeoTable struct {
 const (
 	MinTileSetLevel int16 = 3
 )
+
+const tilesetRefinementReportFilename = "tileset-refinement-report.json"
+
+type refinementLevelStats struct {
+	Level                  int16 `json:"level"`
+	ChildLevel             int16 `json:"childLevel"`
+	PartitionsToRefine     int   `json:"partitionsToRefine"`
+	ChildPartitionsBefore  int64 `json:"childPartitionsBefore"`
+	ChildPartitionsAfter   int64 `json:"childPartitionsAfter"`
+	ChildPartitionsCreated int64 `json:"childPartitionsCreated"`
+	ChildPartitionsRemoved int64 `json:"childPartitionsRemoved"`
+	DurationMilliseconds   int64 `json:"durationMilliseconds"`
+}
+
+type refinementTableStats struct {
+	PartitionTable                  string                 `json:"partitionTable"`
+	SourceTables                    []string               `json:"sourceTables"`
+	Threshold                       int                    `json:"threshold"`
+	MinLevel                        int16                  `json:"minLevel"`
+	MaxLevel                        int16                  `json:"maxLevel"`
+	PartitionsBefore                int64                  `json:"partitionsBefore"`
+	PartitionsAfter                 int64                  `json:"partitionsAfter"`
+	PartitionsCreated               int64                  `json:"partitionsCreated"`
+	PartitionsRemoved               int64                  `json:"partitionsRemoved"`
+	InitialCountUpdateMilliseconds int64                  `json:"initialCountUpdateMilliseconds"`
+	DurationMilliseconds            int64                  `json:"durationMilliseconds"`
+	Levels                          []refinementLevelStats `json:"levels"`
+}
+
+type tilesetRefinementReport struct {
+	Version              int                    `json:"version"`
+	Status               string                 `json:"status"`
+	Error                string                 `json:"error,omitempty"`
+	Bound                string                 `json:"bound"`
+	OutputDirectory      string                 `json:"outputDirectory"`
+	StartedAt            string                 `json:"startedAt"`
+	CompletedAt          string                 `json:"completedAt"`
+	DurationMilliseconds int64                  `json:"durationMilliseconds"`
+	TablesProcessed      int                    `json:"tablesProcessed"`
+	LevelsProcessed      int                    `json:"levelsProcessed"`
+	PartitionsBefore     int64                  `json:"partitionsBefore"`
+	PartitionsAfter      int64                  `json:"partitionsAfter"`
+	PartitionsCreated    int64                  `json:"partitionsCreated"`
+	PartitionsRemoved    int64                  `json:"partitionsRemoved"`
+	Tables               []refinementTableStats `json:"tables"`
+}
 
 type TileSetHash struct {
 	GeoHash string         `json:"geoHash"`
@@ -288,34 +337,97 @@ func RemoveExpired(db *gorm.DB, expire time.Time, boundStr string) error {
 	return nil
 }
 
-func RefineUntilStable(db *gorm.DB, boundStr string) error {
+func RefineUntilStable(db *gorm.DB, boundStr string, outputDirectory string) (resultErr error) {
+	startedAt := time.Now()
+	report := tilesetRefinementReport{
+		Version:         1,
+		Status:          "running",
+		Bound:           boundStr,
+		OutputDirectory: outputDirectory,
+		StartedAt:       startedAt.Format(time.RFC3339Nano),
+		Tables:          make([]refinementTableStats, 0, len(AllTiles)),
+	}
+	if outputDirectory == "" {
+		return fmt.Errorf("tileset output directory is empty")
+	}
+	if err := os.MkdirAll(outputDirectory, 0755); err != nil {
+		return fmt.Errorf("failed to create tileset output directory: %w", err)
+	}
+	defer func() {
+		report.CompletedAt = time.Now().Format(time.RFC3339Nano)
+		report.DurationMilliseconds = time.Since(startedAt).Milliseconds()
+		if resultErr != nil {
+			report.Status = "failed"
+			report.Error = resultErr.Error()
+		} else {
+			report.Status = "success"
+		}
+		if err := writeTilesetRefinementReport(outputDirectory, report); err != nil {
+			if resultErr == nil {
+				resultErr = err
+			} else {
+				log.Errorf("failed to write tileset refinement report: %v", err)
+			}
+		}
+	}()
+
 	bound, err := parseProjectBound(boundStr)
 	if err != nil {
 		return err
 	}
 	for _, table := range AllTiles {
+		tableStartedAt := time.Now()
+		tableStats := refinementTableStats{
+			PartitionTable: table.PartitionTableName,
+			SourceTables:   append([]string(nil), table.GeoTableNames...),
+			Threshold:      table.Threshold,
+			MaxLevel:       MAX_GEOHASH_LEVEL,
+			Levels:         make([]refinementLevelStats, 0),
+		}
 		log.Infof("begin refine tileset table: %+v", table)
+		tableStats.PartitionsBefore, err = countPartitionsInBound(db, table.PartitionTableName, nil, bound)
+		if err != nil {
+			return fmt.Errorf("failed to count partitions before refining %s: %w", table.PartitionTableName, err)
+		}
 
 		minLevel, err := GetMinLevelPartition(db, table.PartitionTableName, bound)
 		if err != nil {
 			return fmt.Errorf("failed to get min level: %v", err)
 		}
+		tableStats.MinLevel = minLevel
 		var level = minLevel
+		countUpdateStartedAt := time.Now()
 		if errU := UpdatePartitionCount(db, table.GeoTableNames, table.PartitionTableName, "", level, table.Threshold, bound); errU != nil {
 			return fmt.Errorf("failed to update partition count: %v", errU)
 		}
+		tableStats.InitialCountUpdateMilliseconds = time.Since(countUpdateStartedAt).Milliseconds()
 		for {
 			if level >= MAX_GEOHASH_LEVEL {
 				break
 			}
 
-			errT := RefinePartitions(db, table, level, 10, bound)
+			levelStats, errT := refinePartitionsWithStats(db, table, level, 10, bound)
 			if errT != nil {
 				return errT
 			}
+			tableStats.Levels = append(tableStats.Levels, levelStats)
+			tableStats.PartitionsCreated += levelStats.ChildPartitionsCreated
+			tableStats.PartitionsRemoved += levelStats.ChildPartitionsRemoved
+			report.LevelsProcessed++
 
 			level = level + 1
 		}
+		tableStats.PartitionsAfter, err = countPartitionsInBound(db, table.PartitionTableName, nil, bound)
+		if err != nil {
+			return fmt.Errorf("failed to count partitions after refining %s: %w", table.PartitionTableName, err)
+		}
+		tableStats.DurationMilliseconds = time.Since(tableStartedAt).Milliseconds()
+		report.Tables = append(report.Tables, tableStats)
+		report.TablesProcessed++
+		report.PartitionsBefore += tableStats.PartitionsBefore
+		report.PartitionsAfter += tableStats.PartitionsAfter
+		report.PartitionsCreated += tableStats.PartitionsCreated
+		report.PartitionsRemoved += tableStats.PartitionsRemoved
 
 		log.Infof("finished refine tileset table: %+v", table)
 	}
@@ -324,9 +436,23 @@ func RefineUntilStable(db *gorm.DB, boundStr string) error {
 }
 
 func RefinePartitions(db *gorm.DB, table GeoTable, level int16, workerCount int, bound projectBound) error {
+	_, err := refinePartitionsWithStats(db, table, level, workerCount, bound)
+	return err
+}
+
+func refinePartitionsWithStats(db *gorm.DB, table GeoTable, level int16, workerCount int, bound projectBound) (refinementLevelStats, error) {
+	startedAt := time.Now()
+	stats := refinementLevelStats{Level: level, ChildLevel: level + 1}
+	childLevel := level + 1
+	childCount, err := countPartitionsInBound(db, table.PartitionTableName, &childLevel, bound)
+	if err != nil {
+		return stats, fmt.Errorf("failed to count level %d partitions before refining: %w", childLevel, err)
+	}
+	stats.ChildPartitionsBefore = childCount
+
 	// Step 1: fetch partitions in a short transaction (or even without tx if safe)
 	var partitions []TileSetPartition
-	err := db.Transaction(func(tx *gorm.DB) error {
+	err = db.Transaction(func(tx *gorm.DB) error {
 		var err error
 		partitions, err = GetNeedRefinePartitions(tx, table.PartitionTableName, level, bound)
 		if err != nil {
@@ -341,11 +467,12 @@ func RefinePartitions(db *gorm.DB, table GeoTable, level int16, workerCount int,
 		return nil
 	})
 	if err != nil {
-		return err
+		return stats, err
 	}
+	stats.PartitionsToRefine = len(partitions)
 
 	if len(partitions) == 0 {
-		return nil
+		return finishRefinementLevelStats(db, table.PartitionTableName, bound, startedAt, stats)
 	}
 
 	// Step 2: process partitions in parallel, each with its own transaction
@@ -372,7 +499,51 @@ func RefinePartitions(db *gorm.DB, table GeoTable, level int16, workerCount int,
 		})
 	}
 
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		return stats, err
+	}
+	return finishRefinementLevelStats(db, table.PartitionTableName, bound, startedAt, stats)
+}
+
+func finishRefinementLevelStats(db *gorm.DB, tableName string, bound projectBound, startedAt time.Time, stats refinementLevelStats) (refinementLevelStats, error) {
+	childCount, err := countPartitionsInBound(db, tableName, &stats.ChildLevel, bound)
+	if err != nil {
+		return stats, fmt.Errorf("failed to count level %d partitions after refining: %w", stats.ChildLevel, err)
+	}
+	stats.ChildPartitionsAfter = childCount
+	if childCount >= stats.ChildPartitionsBefore {
+		stats.ChildPartitionsCreated = childCount - stats.ChildPartitionsBefore
+	} else {
+		stats.ChildPartitionsRemoved = stats.ChildPartitionsBefore - childCount
+	}
+	stats.DurationMilliseconds = time.Since(startedAt).Milliseconds()
+	return stats, nil
+}
+
+func countPartitionsInBound(db *gorm.DB, tableName string, level *int16, bound projectBound) (int64, error) {
+	var count int64
+	query := db.Table(tableName).Where(
+		"ST_Intersects(bbox, ST_MakeEnvelope(?, ?, ?, ?, 4326))", bound.args()...)
+	if level != nil {
+		query = query.Where("level = ?", *level)
+	}
+	if err := query.Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func writeTilesetRefinementReport(outputDirectory string, report tilesetRefinementReport) error {
+	content, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal tileset refinement report: %w", err)
+	}
+	reportPath := filepath.Join(outputDirectory, tilesetRefinementReportFilename)
+	if err := os.WriteFile(reportPath, append(content, '\n'), 0644); err != nil {
+		return fmt.Errorf("failed to write tileset refinement report %s: %w", reportPath, err)
+	}
+	log.Infof("tileset refinement report written to %s", reportPath)
+	return nil
 }
 
 func CleanupChildren(db *gorm.DB, tableName string, parentHash string, level int16, bound projectBound) error {

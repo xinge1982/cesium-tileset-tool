@@ -180,7 +180,7 @@ func (g *FeatureTileSetBuildCommand) Run() error {
 	}
 
 	// 初始化 tileset 分片数据
-	if errR := traffic_feature.RefineUntilStable(db, cfg.Bound); errR != nil {
+	if errR := traffic_feature.RefineUntilStable(db, cfg.Bound, g.outputPath); errR != nil {
 		return errR
 	}
 
