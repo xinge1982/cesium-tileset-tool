@@ -102,18 +102,18 @@ type refinementLevelStats struct {
 }
 
 type refinementTableStats struct {
-	PartitionTable                  string                 `json:"partitionTable"`
-	SourceTables                    []string               `json:"sourceTables"`
-	Threshold                       int                    `json:"threshold"`
-	MinLevel                        int16                  `json:"minLevel"`
-	MaxLevel                        int16                  `json:"maxLevel"`
-	PartitionsBefore                int64                  `json:"partitionsBefore"`
-	PartitionsAfter                 int64                  `json:"partitionsAfter"`
-	PartitionsCreated               int64                  `json:"partitionsCreated"`
-	PartitionsRemoved               int64                  `json:"partitionsRemoved"`
+	PartitionTable                 string                 `json:"partitionTable"`
+	SourceTables                   []string               `json:"sourceTables"`
+	Threshold                      int                    `json:"threshold"`
+	MinLevel                       int16                  `json:"minLevel"`
+	MaxLevel                       int16                  `json:"maxLevel"`
+	PartitionsBefore               int64                  `json:"partitionsBefore"`
+	PartitionsAfter                int64                  `json:"partitionsAfter"`
+	PartitionsCreated              int64                  `json:"partitionsCreated"`
+	PartitionsRemoved              int64                  `json:"partitionsRemoved"`
 	InitialCountUpdateMilliseconds int64                  `json:"initialCountUpdateMilliseconds"`
-	DurationMilliseconds            int64                  `json:"durationMilliseconds"`
-	Levels                          []refinementLevelStats `json:"levels"`
+	DurationMilliseconds           int64                  `json:"durationMilliseconds"`
+	Levels                         []refinementLevelStats `json:"levels"`
 }
 
 type tilesetRefinementReport struct {
@@ -660,10 +660,20 @@ func CheckShouldSplit(db *gorm.DB, geoTables []string, parentHash string, level 
 			SELECT ST_GeoHash(geom, ?) AS geohash,
 				   COUNT(*) AS count
 			FROM %s
-			WHERE ST_GeoHash(geom, ?) LIKE ?
-			  AND ST_Intersects(ST_Transform(geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
-			GROUP BY geohash
-		`, table), append([]interface{}{level, level, parentHash + "%"}, bound.args()...)...).Scan(&counts)
+			WHERE geom && ST_GeomFromGeoHash(?)
+			  AND ST_GeoHash(geom, ?) LIKE ?
+			  AND geom && ST_MakeEnvelope(?, ?, ?, ?, 4326)
+			GROUP BY 1
+		`, table),
+			level,
+			parentHash,
+			level,
+			parentHash+"%",
+			bound.MinLng,
+			bound.MinLat,
+			bound.MaxLng,
+			bound.MaxLat,
+		).Scan(&counts)
 		if result.Error != nil {
 			return false
 		}
