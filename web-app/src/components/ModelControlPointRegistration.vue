@@ -2,7 +2,7 @@
   <el-dialog
       v-model="dialogVisible"
       title="模型控制点配准"
-      width="800px"
+      width="980px"
       :modal="false"
       modal-class="model-registration-overlay"
       :lock-scroll="false"
