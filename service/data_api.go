@@ -31,6 +31,8 @@ func (s *DataAccess) ApiRegister(g *gin.Engine, prefix string) {
 
 	tilesetSourceController :=
 		NewTilesetSourceController(searchService)
+	modelRegistrationController :=
+		newModelRegistrationController(searchService)
 
 	r.GET(
 		"/tilesets/:tilesetKey/sources/:sourceId/search",
@@ -45,6 +47,16 @@ func (s *DataAccess) ApiRegister(g *gin.Engine, prefix string) {
 	r.PUT(
 		"/tilesets/:tilesetKey/sources/:sourceId",
 		tilesetSourceController.Update,
+	)
+
+	r.POST(
+		"/tilesets/:tilesetKey/sources/:sourceId/model-registration/solve",
+		modelRegistrationController.Solve,
+	)
+
+	r.POST(
+		"/tilesets/:tilesetKey/sources/:sourceId/model-registration/confirm",
+		modelRegistrationController.Confirm,
 	)
 
 	r.GET(

@@ -110,6 +110,14 @@
           </template>
         </el-dropdown>
         <button id="default-view-button" type="button" class="primary" @click="flyToDefaultView">默认视角</button>
+        <button
+            id="model-registration-button"
+            type="button"
+            :disabled="!modelRegistrationContext"
+            @click="modelRegistrationVisible = true"
+        >
+          模型控制点配准
+        </button>
         <button id="globe-button" type="button" @click="toggleGlobe">{{ globeVisible ? '隐藏地球' : '显示地球' }}</button>
         <button id="camera-button" type="button" @click="debugCameraPosition">相机参数</button>
         <el-switch
@@ -201,6 +209,12 @@
       </div>
     </section>
 
+    <ModelControlPointRegistration
+        v-model="modelRegistrationVisible"
+        :viewer="viewer"
+        :context="modelRegistrationContext"
+    />
+
     <el-tour
         :key="helpTourKey"
         v-model="helpTourVisible"
@@ -281,6 +295,9 @@ import 'cesium/Build/Cesium/Widgets/widgets.css'
 import CesiumNavigation from 'cesium-navigation-es6'
 import http from './api/http'
 import {isNullOrEmpty} from './hooks/use-common'
+import ModelControlPointRegistration, {
+  type ModelRegistrationContext,
+} from './components/ModelControlPointRegistration.vue'
 import {
   TilesetManager,
   type LODDebugInfo,
@@ -312,6 +329,8 @@ const managedLayers = ref<ManagedTileset[]>([])
 const layersRefreshing = ref(false)
 const exportLoading = ref(false)
 const focusedRowIdentity = ref('')
+const modelRegistrationVisible = ref(false)
+const modelRegistrationContext = ref<ModelRegistrationContext | null>(null)
 const helpTourVisible = ref(false)
 const helpTourKey = ref(0)
 const sourceCascaderRef = ref<{
@@ -715,6 +734,8 @@ function maybeStartHelpTour() {
 }
 
 function handleSourceChange() {
+  modelRegistrationVisible.value = false
+  modelRegistrationContext.value = null
   focusedRowIdentity.value = ''
   searchPageNumber.value = 1
   searchTotal.value = 0
@@ -816,6 +837,23 @@ function focusSourceDetail(
     ? focusWktPolygon(viewer, geom)
     : undefined
 
+  modelRegistrationVisible.value = false
+  modelRegistrationContext.value = highlightPosition
+    ? (() => {
+      const center = Cesium.Cartographic.fromCartesian(highlightPosition)
+      return {
+        tilesetKey,
+        sourceId,
+        key: String(key),
+        center: {
+          longitude: Cesium.Math.toDegrees(center.longitude),
+          latitude: Cesium.Math.toDegrees(center.latitude),
+          height: center.height,
+        },
+      }
+    })()
+    : null
+
   const tileset = tilesetSourceOptions.value.find(
     item => item.value === tilesetKey,
   )
@@ -864,6 +902,8 @@ async function focusSearchResult(item: any) {
   } catch (error) {
     console.error('load tileset source detail failed:', error)
     currentDetail.value = undefined
+    modelRegistrationVisible.value = false
+    modelRegistrationContext.value = null
   }
 }
 
