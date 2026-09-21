@@ -217,7 +217,7 @@ async function loadLocalModel(event: Event) {
     )
     const enuMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(origin)
     const initialRotation = Cesium.Matrix4.fromRotationTranslation(
-      Cesium.Matrix3.fromRotationZ(Cesium.Math.PI_OVER_TWO),
+      Cesium.Matrix3.fromRotationZ(-Cesium.Math.PI_OVER_TWO),
     )
     const modelMatrix = Cesium.Matrix4.multiply(
       enuMatrix,

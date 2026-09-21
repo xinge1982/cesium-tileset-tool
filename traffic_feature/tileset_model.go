@@ -2306,12 +2306,24 @@ func QueryGantrysByGeohashBBox(configName string, db *gorm.DB, geohash string, b
 // 查询分片的所有模型数据
 func QueryBridgesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
 	var devices []*GeoHashModel
+	hasColumnModel := db.Migrator().HasColumn(BridgeTileTableName, "metadata")
+	if !hasColumnModel {
+		alterSQL := fmt.Sprintf(
+			"ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s JSONB",
+			BridgeTileTableName,
+			quoteIdentifier("metadata"),
+		)
+		if err := db.Exec(alterSQL).Error; err != nil {
+			return nil, fmt.Errorf("auto-create column %q: %w", "metadata", err)
+		}
+	}
+
 	err := db.Raw(fmt.Sprintf(`
 		SELECT dev.id, dev.id::text as name, 'hdBridge' as type, dev.model, '%s' as table_name,
 		       ST_X(ST_TRANSFORM(dev.geom, 4326)) AS lng,
 		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
 		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, 
-		       dev.transform, dev.obj_angle
+		       dev.transform, dev.obj_angle, dev.metadata
 		FROM %s dev
 		WHERE dev.geom && ST_GeomFromGeoHash(?)
   		  AND ST_GeoHash(dev.geom, ?) = ? 
@@ -3079,4 +3091,8 @@ func getMinioOutputSignGltfClient(code string) (*minioconn.MinioConn, string, st
 	}
 
 	return nil, "", "", errors.New("context is null")
+}
+
+func quoteIdentifier(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
