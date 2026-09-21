@@ -27,6 +27,13 @@
             hidden
             @change="loadLocalModel"
         />
+        <input
+            ref="registrationFileInput"
+            type="file"
+            accept=".json,application/json"
+            hidden
+            @change="importRegistrationData"
+        />
         <el-button type="primary" :loading="modelLoading" @click="modelFileInput?.click()">
           加载本地大桥 GLB
         </el-button>
@@ -41,6 +48,13 @@
         <el-button :disabled="guideLines.length === 0 && !guideDrawing" @click="clearGuideLines">
           清空辅助线
         </el-button>
+        <el-button @click="registrationFileInput?.click()">导入数据</el-button>
+        <el-button
+            :disabled="pointPairs.length === 0 && guideLines.length === 0"
+            @click="exportRegistrationData"
+        >
+          导出数据
+        </el-button>
         <el-button
             type="success"
             :loading="solving"
@@ -49,6 +63,10 @@
         >
           计算纠偏矩阵
         </el-button>
+      </div>
+
+      <div v-if="importedModelName" class="imported-model-name">
+        导入数据中的模型：{{ importedModelName }}
       </div>
 
       <el-alert
@@ -156,6 +174,14 @@ interface RegistrationSolution {
   }>
 }
 
+interface RegistrationTransferFile {
+  version: 1
+  exportedAt: string
+  modelName: string
+  controlPointPairs: ControlPointPair[]
+  guideLines: RegistrationGeoPoint[][]
+}
+
 const props = defineProps<{
   modelValue: boolean
   viewer: Cesium.Viewer | null
@@ -172,11 +198,13 @@ const dialogVisible = computed({
   set: value => emit('update:modelValue', value),
 })
 const modelFileInput = ref<HTMLInputElement>()
+const registrationFileInput = ref<HTMLInputElement>()
 const pointPairs = ref<ControlPointPair[]>([])
 const modelLoading = ref(false)
 const solving = ref(false)
 const confirming = ref(false)
 const loadedModelName = ref('')
+const importedModelName = ref('')
 const pickHint = ref('')
 const solution = ref<RegistrationSolution>()
 const guideDrawing = ref(false)
@@ -222,6 +250,132 @@ function residualFor(id: string) {
 
 function errorMessage(error: any, fallback: string) {
   return String(error?.response?.data?.error || error?.message || fallback)
+}
+
+function exportRegistrationData() {
+  const modelName = loadedModelName.value || importedModelName.value
+  const data: RegistrationTransferFile = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    modelName,
+    controlPointPairs: pointPairs.value.map(pair => ({
+      id: pair.id,
+      modelPoint: pair.modelPoint ? { ...pair.modelPoint } : undefined,
+      targetPoint: pair.targetPoint ? { ...pair.targetPoint } : undefined,
+    })),
+    guideLines: guideLines.value.map(line => line.map(cartesianToGeoPoint)),
+  }
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  const baseName = (modelName || String(props.context?.key || 'model-registration'))
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+  link.href = url
+  link.download = `${baseName || 'model-registration'}-control-points.json`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+async function importRegistrationData(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file || !props.viewer) return
+
+  try {
+    const parsed = JSON.parse(await file.text()) as unknown
+    const data = validateRegistrationTransferFile(parsed)
+    const currentModelName = loadedModelName.value
+
+    finishGuideLine()
+    cancelPicking()
+    clearSolutionAndPreview()
+    for (const id of Array.from(pairEntities.keys())) removePairEntities(id)
+    clearGuideLines()
+
+    pointPairs.value = data.controlPointPairs.map(pair => ({
+      id: pair.id,
+      modelPoint: pair.modelPoint ? { ...pair.modelPoint } : undefined,
+      targetPoint: pair.targetPoint ? { ...pair.targetPoint } : undefined,
+    }))
+    for (const pair of pointPairs.value) refreshPairEntities(pair)
+    nextPointNumber = nextControlPointNumber(pointPairs.value)
+
+    for (const line of data.guideLines) {
+      addCompletedGuideLine(line.map(geoPointToCartesian))
+    }
+    importedModelName.value = data.modelName
+    props.viewer.scene.requestRender()
+
+    if (currentModelName && data.modelName && currentModelName !== data.modelName) {
+      ElMessage.warning(`导入完成，但数据模型 ${data.modelName} 与当前模型 ${currentModelName} 不一致`)
+    } else {
+      ElMessage.success('控制点对和辅助线已导入并重建')
+    }
+  } catch (error) {
+    ElMessage.error(errorMessage(error, '配准数据导入失败'))
+  }
+}
+
+function validateRegistrationTransferFile(value: unknown): RegistrationTransferFile {
+  if (!value || typeof value !== 'object') throw new Error('导入文件不是有效的 JSON 对象')
+  const data = value as Record<string, unknown>
+  if (data.version !== 1) throw new Error('不支持的配准数据文件版本')
+  if (typeof data.modelName !== 'string') throw new Error('导入文件缺少模型名称')
+  if (!Array.isArray(data.controlPointPairs)) throw new Error('导入文件缺少控制点对数组')
+  if (!Array.isArray(data.guideLines)) throw new Error('导入文件缺少辅助线数组')
+
+  const ids = new Set<string>()
+  const controlPointPairs = data.controlPointPairs.map((item, index) => {
+    if (!item || typeof item !== 'object') throw new Error(`第 ${index + 1} 个控制点对格式错误`)
+    const pair = item as Record<string, unknown>
+    if (typeof pair.id !== 'string' || !pair.id.trim()) throw new Error(`第 ${index + 1} 个控制点对缺少 ID`)
+    if (ids.has(pair.id)) throw new Error(`控制点 ID 重复：${pair.id}`)
+    ids.add(pair.id)
+    return {
+      id: pair.id,
+      modelPoint: pair.modelPoint == null ? undefined : validateGeoPoint(pair.modelPoint, `${pair.id} 模型点`),
+      targetPoint: pair.targetPoint == null ? undefined : validateGeoPoint(pair.targetPoint, `${pair.id} 目标点`),
+    }
+  })
+  const guideLines = data.guideLines.map((line, lineIndex) => {
+    if (!Array.isArray(line) || line.length < 2) throw new Error(`第 ${lineIndex + 1} 条辅助线至少需要两个点`)
+    return line.map((point, pointIndex) => validateGeoPoint(
+      point,
+      `第 ${lineIndex + 1} 条辅助线的第 ${pointIndex + 1} 个点`,
+    ))
+  })
+  return {
+    version: 1,
+    exportedAt: typeof data.exportedAt === 'string' ? data.exportedAt : '',
+    modelName: data.modelName,
+    controlPointPairs,
+    guideLines,
+  }
+}
+
+function validateGeoPoint(value: unknown, label: string): RegistrationGeoPoint {
+  if (!value || typeof value !== 'object') throw new Error(`${label}格式错误`)
+  const point = value as Record<string, unknown>
+  const longitude = Number(point.longitude)
+  const latitude = Number(point.latitude)
+  const height = Number(point.height)
+  if (![longitude, latitude, height].every(Number.isFinite)) throw new Error(`${label}包含无效坐标`)
+  if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
+    throw new Error(`${label}经纬度超出有效范围`)
+  }
+  return { longitude, latitude, height }
+}
+
+function nextControlPointNumber(pairs: ControlPointPair[]) {
+  const maximum = pairs.reduce((result, pair) => {
+    const match = /^CP(\d+)$/i.exec(pair.id)
+    return match ? Math.max(result, Number(match[1])) : result
+  }, 0)
+  return maximum + 1
 }
 
 async function loadLocalModel(event: Event) {
@@ -434,6 +588,38 @@ function clearGuideLines() {
   guideEntities.length = 0
   guideLines.value = []
   viewer?.scene.requestRender()
+}
+
+function addCompletedGuideLine(points: Cesium.Cartesian3[]) {
+  const viewer = props.viewer
+  if (!viewer || points.length < 2) return
+  const completedPoints = points.map(point => Cesium.Cartesian3.clone(point))
+  const lineEntity = viewer.entities.add({
+    polyline: {
+      positions: completedPoints,
+      width: 3,
+      material: Cesium.Color.CYAN,
+      depthFailMaterial: Cesium.Color.CYAN.withAlpha(0.65),
+      clampToGround: false,
+    },
+  })
+  const labelEntity = viewer.entities.add({
+    position: completedPoints[completedPoints.length - 1],
+    label: {
+      text: formatGuideLength(polylineLength(completedPoints)),
+      font: '16px sans-serif',
+      fillColor: Cesium.Color.CYAN,
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 3,
+      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      showBackground: true,
+      backgroundColor: Cesium.Color.BLACK.withAlpha(0.72),
+      pixelOffset: new Cesium.Cartesian2(0, -18),
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+  })
+  guideEntities.push(lineEntity, labelEntity)
+  guideLines.value.push(completedPoints)
 }
 
 function removeGuideEntity(entity?: Cesium.Entity) {
@@ -776,8 +962,10 @@ function cleanupRegistration() {
   removeLoadedModel()
   pointPairs.value = []
   solution.value = undefined
+  importedModelName.value = ''
   nextPointNumber = 1
   if (modelFileInput.value) modelFileInput.value.value = ''
+  if (registrationFileInput.value) registrationFileInput.value.value = ''
 }
 
 onBeforeUnmount(cleanupRegistration)
@@ -792,6 +980,7 @@ onBeforeUnmount(cleanupRegistration)
 
 .registration-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
 }
@@ -803,6 +992,11 @@ onBeforeUnmount(cleanupRegistration)
   color: var(--el-text-color-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.imported-model-name {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 
 .solution-card {
