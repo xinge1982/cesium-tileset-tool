@@ -33,6 +33,15 @@
         <span class="model-name">{{ loadedModelName || '尚未加载模型' }}</span>
         <el-button @click="addControlPointPair">增加控制点对</el-button>
         <el-button
+            :type="guideDrawing ? 'warning' : 'default'"
+            @click="guideDrawing ? finishGuideLine() : startGuideLine()"
+        >
+          {{ guideDrawing ? '结束辅助线' : '绘制辅助线' }}
+        </el-button>
+        <el-button :disabled="guideLines.length === 0 && !guideDrawing" @click="clearGuideLines">
+          清空辅助线
+        </el-button>
+        <el-button
             type="success"
             :loading="solving"
             :disabled="completePointCount < 3"
@@ -46,6 +55,14 @@
           v-if="pickHint"
           :title="pickHint"
           type="warning"
+          :closable="false"
+          show-icon
+      />
+
+      <el-alert
+          v-if="guideDrawing"
+          title="辅助线绘制中：左键连续添加节点，移动鼠标可实时查看长度，右键或点击“结束辅助线”完成"
+          type="info"
           :closable="false"
           show-icon
       />
@@ -162,6 +179,8 @@ const confirming = ref(false)
 const loadedModelName = ref('')
 const pickHint = ref('')
 const solution = ref<RegistrationSolution>()
+const guideDrawing = ref(false)
+const guideLines = ref<Cesium.Cartesian3[][]>([])
 const completePointCount = computed(() => pointPairs.value.filter(
   pair => pair.modelPoint && pair.targetPoint,
 ).length)
@@ -170,8 +189,14 @@ let loadedModel: Cesium.Model | null = null
 let baseModelMatrix: Cesium.Matrix4 | null = null
 let loadedModelObjectURL = ''
 let pickHandler: Cesium.ScreenSpaceEventHandler | null = null
+let guideHandler: Cesium.ScreenSpaceEventHandler | null = null
 let nextPointNumber = 1
 const pairEntities = new Map<string, Cesium.Entity[]>()
+const guideEntities: Cesium.Entity[] = []
+let activeGuidePoints: Cesium.Cartesian3[] = []
+let activeGuideCursor: Cesium.Cartesian3 | undefined
+let activeGuideLineEntity: Cesium.Entity | undefined
+let activeGuideLabelEntity: Cesium.Entity | undefined
 
 function formatCoordinate(value: number, digits: number) {
   return Number.isFinite(value) ? value.toFixed(digits) : '—'
@@ -217,7 +242,7 @@ async function loadLocalModel(event: Event) {
     )
     const enuMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(origin)
     const initialRotation = Cesium.Matrix4.fromRotationTranslation(
-      Cesium.Matrix3.fromRotationZ(Cesium.Math.PI_OVER_TWO),
+      Cesium.Matrix3.fromRotationZ(-Cesium.Math.PI_OVER_TWO),
     )
     const modelMatrix = Cesium.Matrix4.multiply(
       enuMatrix,
@@ -274,6 +299,7 @@ function beginPick(id: string, kind: 'model' | 'target') {
     return
   }
 
+  finishGuideLine()
   cancelPicking()
   clearSolutionAndPreview()
   setPairEntitiesVisible(false)
@@ -307,6 +333,148 @@ function beginPick(id: string, kind: 'model' | 'target') {
     refreshPairEntities(pair)
     cancelPicking()
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
+}
+
+function startGuideLine() {
+  const viewer = props.viewer
+  if (!viewer) return
+  cancelPicking()
+  finishGuideLine()
+  guideDrawing.value = true
+  activeGuidePoints = []
+  activeGuideCursor = undefined
+  viewer.scene.canvas.style.cursor = 'crosshair'
+
+  activeGuideLineEntity = viewer.entities.add({
+    polyline: {
+      positions: new Cesium.CallbackProperty(() => guidePreviewPositions(), false),
+      width: 3,
+      material: Cesium.Color.CYAN,
+      depthFailMaterial: Cesium.Color.CYAN.withAlpha(0.65),
+      clampToGround: false,
+    },
+  })
+  activeGuideLabelEntity = viewer.entities.add({
+    position: new Cesium.CallbackPositionProperty(() => guideLabelPosition(), false),
+    label: {
+      text: new Cesium.CallbackProperty(() => guideLengthText(), false),
+      font: '16px sans-serif',
+      fillColor: Cesium.Color.CYAN,
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 3,
+      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      showBackground: true,
+      backgroundColor: Cesium.Color.BLACK.withAlpha(0.72),
+      pixelOffset: new Cesium.Cartesian2(0, -18),
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+  })
+  guideEntities.push(activeGuideLineEntity, activeGuideLabelEntity)
+
+  guideHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
+  guideHandler.setInputAction((movement: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
+    const position = pickGuidePosition(viewer, movement.position)
+    if (!position) return
+    activeGuidePoints.push(Cesium.Cartesian3.clone(position))
+    activeGuideCursor = Cesium.Cartesian3.clone(position)
+    viewer.scene.requestRender()
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
+  guideHandler.setInputAction((movement: Cesium.ScreenSpaceEventHandler.MotionEvent) => {
+    if (activeGuidePoints.length === 0) return
+    const position = pickGuidePosition(viewer, movement.endPosition)
+    if (!position) return
+    activeGuideCursor = Cesium.Cartesian3.clone(position)
+    viewer.scene.requestRender()
+  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
+  guideHandler.setInputAction(() => finishGuideLine(), Cesium.ScreenSpaceEventType.RIGHT_CLICK)
+  viewer.scene.requestRender()
+}
+
+function finishGuideLine() {
+  if (!guideDrawing.value && !guideHandler) return
+  const viewer = props.viewer
+  guideHandler?.destroy()
+  guideHandler = null
+  guideDrawing.value = false
+  if (viewer && !viewer.isDestroyed()) viewer.scene.canvas.style.cursor = ''
+
+  if (activeGuidePoints.length >= 2) {
+    const completedPoints = activeGuidePoints.map(point => Cesium.Cartesian3.clone(point))
+    guideLines.value.push(completedPoints)
+    if (activeGuideLineEntity?.polyline) {
+      activeGuideLineEntity.polyline.positions = new Cesium.ConstantProperty(completedPoints)
+    }
+    if (activeGuideLabelEntity) {
+      activeGuideLabelEntity.position = new Cesium.ConstantPositionProperty(
+        completedPoints[completedPoints.length - 1],
+      )
+      if (activeGuideLabelEntity.label) {
+        activeGuideLabelEntity.label.text = new Cesium.ConstantProperty(
+          formatGuideLength(polylineLength(completedPoints)),
+        )
+      }
+    }
+  } else {
+    removeGuideEntity(activeGuideLineEntity)
+    removeGuideEntity(activeGuideLabelEntity)
+  }
+  activeGuidePoints = []
+  activeGuideCursor = undefined
+  activeGuideLineEntity = undefined
+  activeGuideLabelEntity = undefined
+  viewer?.scene.requestRender()
+}
+
+function clearGuideLines() {
+  finishGuideLine()
+  const viewer = props.viewer
+  if (viewer && !viewer.isDestroyed()) {
+    for (const entity of guideEntities) viewer.entities.remove(entity)
+  }
+  guideEntities.length = 0
+  guideLines.value = []
+  viewer?.scene.requestRender()
+}
+
+function removeGuideEntity(entity?: Cesium.Entity) {
+  if (!entity) return
+  const viewer = props.viewer
+  if (viewer && !viewer.isDestroyed()) viewer.entities.remove(entity)
+  const index = guideEntities.indexOf(entity)
+  if (index >= 0) guideEntities.splice(index, 1)
+}
+
+function guidePreviewPositions() {
+  if (activeGuidePoints.length === 0) return []
+  if (!activeGuideCursor) return activeGuidePoints
+  return [...activeGuidePoints, activeGuideCursor]
+}
+
+function guideLabelPosition() {
+  return activeGuideCursor ?? activeGuidePoints[activeGuidePoints.length - 1]
+}
+
+function guideLengthText() {
+  return formatGuideLength(polylineLength(guidePreviewPositions()))
+}
+
+function polylineLength(points: Cesium.Cartesian3[]) {
+  let length = 0
+  for (let index = 1; index < points.length; index++) {
+    length += Cesium.Cartesian3.distance(points[index - 1], points[index])
+  }
+  return length
+}
+
+function formatGuideLength(length: number) {
+  return length >= 1000
+    ? `${(length / 1000).toFixed(3)} km`
+    : `${length.toFixed(2)} m`
+}
+
+function pickGuidePosition(viewer: Cesium.Viewer, screenPosition: Cesium.Cartesian2) {
+  const picked = viewer.scene.pick(screenPosition)
+  return pickScenePosition(viewer, screenPosition, picked)
 }
 
 function pickScenePosition(
@@ -602,6 +770,7 @@ function registrationApiPath(action: 'solve' | 'confirm') {
 }
 
 function cleanupRegistration() {
+  clearGuideLines()
   cancelPicking()
   for (const id of Array.from(pairEntities.keys())) removePairEntities(id)
   removeLoadedModel()
