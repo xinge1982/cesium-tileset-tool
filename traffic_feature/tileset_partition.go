@@ -160,6 +160,7 @@ const (
 	DeviceSfzTileTableName          string = "hdtraffic_ene_sfz"
 	DeviceFwqTileTableName          string = "hdtraffic_ene_fwq"
 	PoleTileTableName               string = "hdpole"
+	LightPoleTileTableName          string = "hdpole_ld"
 	GantryTileTableName             string = "hdgantry"
 	BridgeTileTableName             string = "hdtraffic_bridges"
 	RoadSideFacilityTileTableName   string = "hdroad_side_facility"

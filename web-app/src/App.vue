@@ -525,7 +525,7 @@ async function getTilesets() {
 
     if (tilesetManager) {
       managedLayers.value = await tilesetManager.loadAll(
-        tilesetSourceOptions.value as TilesetConfig[],
+        tilesetSourceOptions.value as any[],
       )
     }
 

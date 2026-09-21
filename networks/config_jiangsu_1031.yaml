@@ -1,6 +1,6 @@
 Desc: sw_jiangsu_1031
-Bound: 120.9509,31.7113,121.0263,31.8967
-#Bound: 116.61,30.36,122.904,35.573
+#Bound: 120.9509,31.7113,121.0263,31.8967
+Bound: 116.61,30.36,122.904,35.573
 
 DefaultView:
   lon: 120.99298821
@@ -586,6 +586,53 @@ Tilesets:
               type: geom
               column: geom
 
+      - id: light
+        name:  路灯
+
+        lod:
+          lod0ModelMode: skip
+          lod1ModelMode: skip
+          lod2ModelMode: copy-lod3
+
+        match:
+          operator: prefix
+          value: hdpole_ld
+
+        keyMapping:
+          operator: removePrefix
+          value: hdpole_ld.
+
+        table:
+          schema: public
+          name: hdpole_ld
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: model
+            label: 模型
+            list: true
+            search: true
+            editable: false
+            submit: false
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
+
   roadsurface:
     name: 道路面
     url: https://tileset.amap3d.online:48611/share/jiangsu/%E6%B1%9F%E8%8B%8F02/roadsurface/tileset.json
@@ -1041,7 +1088,7 @@ Tilesets:
         table:
           schema: public
           name: hdservice_area
-          primaryKey: id
+          primaryKey: fid
           geometryField: geom
 
         fields:

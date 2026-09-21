@@ -1840,6 +1840,14 @@ func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHas
 			for _, hashModels := range vs {
 				appendGeoHashModelsByGroup(models, hashModels...)
 			}
+		case LightPoleTileTableName:
+			vs, errQ := QueryLightPolesByGeohashBBox(configName, db, geoHash, bound, tile.LOD)
+			if errQ != nil {
+				return nil, errQ
+			}
+			for _, hashModels := range vs {
+				appendGeoHashModelsByGroup(models, hashModels...)
+			}
 		default:
 			return nil, fmt.Errorf("Unsupport table %s", name)
 		}
@@ -2461,6 +2469,34 @@ func QueryBillboardsByGeohashBBox(configName string, db *gorm.DB, geohash string
   		  AND (dev.model_name like '%%glb' or dev.model_name like '%%gltf')
 		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
 	`, BillboardsTileTableName, BillboardsTileTableName),
+		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
+	if err != nil {
+		return nil, err
+	}
+
+	models, err2 := getModelContentFromMinio(db, configName, devices, lod)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	return models, err
+}
+
+// 查询分片的所有模型数据
+func QueryLightPolesByGeohashBBox(configName string, db *gorm.DB, geohash string, bound projectBound, lod config.TilesetLODConfig) (map[string][]*GeoHashModel, error) {
+	var devices []*GeoHashModel
+	err := db.Raw(fmt.Sprintf(`
+		SELECT dev.id, 'lignt' as name, 'hdDevice' as type, dev.model, '%s' as table_name, 
+		       ST_X(ST_TRANSFORM(dev.geom, 4326)) AS lng,
+		       ST_Y(ST_TRANSFORM(dev.geom, 4326)) AS lat,
+		       ST_Z(ST_TRANSFORM(dev.geom, 4326)) AS alt, 
+		       dev.transform, dev.obj_angle
+		FROM %s dev
+		WHERE dev.geom && ST_GeomFromGeoHash(?)
+  		  AND ST_GeoHash(dev.geom, ?) = ? 
+		  AND (dev.model like '%%glb' or dev.model like '%%gltf')
+		  AND ST_Intersects(ST_Transform(dev.geom, 4326), ST_MakeEnvelope(?, ?, ?, ?, 4326))
+	`, LightPoleTileTableName, LightPoleTileTableName),
 		append([]interface{}{geohash, len(geohash), geohash}, bound.args()...)...).Scan(&devices).Error
 	if err != nil {
 		return nil, err
