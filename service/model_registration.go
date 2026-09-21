@@ -60,9 +60,8 @@ type modelRegistrationResult struct {
 }
 
 type modelRegistrationConfirmRequest struct {
-	Key         string                  `json:"key"`
-	Translation registrationTranslation `json:"translation"`
-	Quaternion  registrationQuaternion  `json:"quaternion"`
+	Key       string             `json:"key"`
+	Transform map[string]float64 `json:"transform"`
 }
 
 type modelRegistrationController struct {
@@ -468,31 +467,22 @@ func (service *TilesetSourceSearchService) SaveModelRegistration(
 	if key == "" {
 		return errors.New("primary key is required")
 	}
-	values := []float64{
-		request.Translation.X, request.Translation.Y, request.Translation.Z,
-		request.Quaternion.X, request.Quaternion.Y, request.Quaternion.Z, request.Quaternion.W,
+	if len(request.Transform) != 16 {
+		return errors.New("registration transform must contain 16 values")
 	}
-	for _, value := range values {
+	for index := 0; index < 16; index++ {
+		value, exists := request.Transform[fmt.Sprintf("%d", index)]
+		if !exists {
+			return fmt.Errorf("registration transform is missing index %d", index)
+		}
 		if !registrationFinite(value) {
-			return errors.New("registration contains a non-finite value")
+			return errors.New("registration transform contains a non-finite value")
 		}
 	}
-	quaternionNorm := math.Sqrt(
-		request.Quaternion.X*request.Quaternion.X +
-			request.Quaternion.Y*request.Quaternion.Y +
-			request.Quaternion.Z*request.Quaternion.Z +
-			request.Quaternion.W*request.Quaternion.W,
-	)
-	if quaternionNorm < 1e-12 {
-		return errors.New("registration quaternion is invalid")
+	transformJSON, err := json.Marshal(request.Transform)
+	if err != nil {
+		return fmt.Errorf("encode registration transform: %w", err)
 	}
-	request.Quaternion.X /= quaternionNorm
-	request.Quaternion.Y /= quaternionNorm
-	request.Quaternion.Z /= quaternionNorm
-	request.Quaternion.W /= quaternionNorm
-
-	translationJSON, _ := json.Marshal(request.Translation)
-	quaternionJSON, _ := json.Marshal(request.Quaternion)
 	tableSQL := qualifiedTableName(source.Table.Schema, source.Table.Name)
 	primaryKeySQL := quoteIdentifier(source.Table.PrimaryKey)
 
@@ -500,29 +490,26 @@ func (service *TilesetSourceSearchService) SaveModelRegistration(
 		alterSQL := fmt.Sprintf(
 			"ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s JSONB",
 			tableSQL,
-			quoteIdentifier("model_data"),
+			quoteIdentifier("metadata"),
 		)
 		if err := tx.Exec(alterSQL).Error; err != nil {
-			return fmt.Errorf("auto-create column %q: %w", "model_data", err)
+			return fmt.Errorf("auto-create column %q: %w", "metadata", err)
 		}
 
 		updateSQL := fmt.Sprintf(
 			`UPDATE %s
 			    SET %s = jsonb_set(
-			        jsonb_set(
-			            CASE WHEN jsonb_typeof(%s) = 'object' THEN %s ELSE '{}'::jsonb END,
-			            '{translation}', ?::jsonb, true
-			        ),
-			        '{quaternion}', ?::jsonb, true
+			        CASE WHEN jsonb_typeof(%s) = 'object' THEN %s ELSE '{}'::jsonb END,
+			        '{transform}', ?::jsonb, true
 			    )
 			  WHERE COALESCE(CAST(%s AS TEXT), '') = ?`,
 			tableSQL,
-			quoteIdentifier("model_data"),
-			quoteIdentifier("model_data"),
-			quoteIdentifier("model_data"),
+			quoteIdentifier("metadata"),
+			quoteIdentifier("metadata"),
+			quoteIdentifier("metadata"),
 			primaryKeySQL,
 		)
-		result := tx.Exec(updateSQL, string(translationJSON), string(quaternionJSON), key)
+		result := tx.Exec(updateSQL, string(transformJSON), key)
 		if result.Error != nil {
 			return fmt.Errorf("save model registration: %w", result.Error)
 		}

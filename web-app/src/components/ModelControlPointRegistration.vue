@@ -4,6 +4,8 @@
       title="模型控制点配准"
       width="980px"
       :modal="false"
+      modal-class="model-registration-overlay"
+      :lock-scroll="false"
       :close-on-click-modal="false"
       draggable
       destroy-on-close
@@ -165,6 +167,7 @@ const completePointCount = computed(() => pointPairs.value.filter(
 ).length)
 
 let loadedModel: Cesium.Model | null = null
+let baseModelMatrix: Cesium.Matrix4 | null = null
 let loadedModelObjectURL = ''
 let pickHandler: Cesium.ScreenSpaceEventHandler | null = null
 let nextPointNumber = 1
@@ -212,13 +215,22 @@ async function loadLocalModel(event: Event) {
       center.latitude,
       center.height,
     )
-    const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(origin)
+    const enuMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(origin)
+    const initialRotation = Cesium.Matrix4.fromRotationTranslation(
+      Cesium.Matrix3.fromRotationZ(Cesium.Math.PI_OVER_TWO),
+    )
+    const modelMatrix = Cesium.Matrix4.multiply(
+      enuMatrix,
+      initialRotation,
+      new Cesium.Matrix4(),
+    )
     const model = await Cesium.Model.fromGltfAsync({
       url: loadedModelObjectURL,
       modelMatrix,
     })
     props.viewer.scene.primitives.add(model)
     loadedModel = model
+    baseModelMatrix = Cesium.Matrix4.clone(modelMatrix, new Cesium.Matrix4())
     loadedModelName.value = file.name
     props.viewer.scene.requestRender()
     ElMessage.success('本地模型已按当前大桥中心点放置')
@@ -235,22 +247,23 @@ function removeLoadedModel() {
     props.viewer.scene.primitives.remove(loadedModel)
   }
   loadedModel = null
+  baseModelMatrix = null
   loadedModelName.value = ''
   if (loadedModelObjectURL) URL.revokeObjectURL(loadedModelObjectURL)
   loadedModelObjectURL = ''
 }
 
 function addControlPointPair() {
+  clearSolutionAndPreview()
   const id = `CP${String(nextPointNumber++).padStart(2, '0')}`
   pointPairs.value.push({ id })
-  solution.value = undefined
 }
 
 function removeControlPointPair(id: string) {
   cancelPicking()
+  clearSolutionAndPreview()
   removePairEntities(id)
   pointPairs.value = pointPairs.value.filter(pair => pair.id !== id)
-  solution.value = undefined
 }
 
 function beginPick(id: string, kind: 'model' | 'target') {
@@ -262,6 +275,7 @@ function beginPick(id: string, kind: 'model' | 'target') {
   }
 
   cancelPicking()
+  clearSolutionAndPreview()
   setPairEntitiesVisible(false)
   if (kind === 'target' && loadedModel) loadedModel.show = false
   pickHint.value = kind === 'model'
@@ -289,7 +303,7 @@ function beginPick(id: string, kind: 'model' | 'target') {
     const point = cartesianToGeoPoint(position)
     if (kind === 'model') pair.modelPoint = point
     else pair.targetPoint = point
-    solution.value = undefined
+    clearSolutionAndPreview()
     refreshPairEntities(pair)
     cancelPicking()
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
@@ -330,14 +344,18 @@ function geoPointToCartesian(point: RegistrationGeoPoint) {
   return Cesium.Cartesian3.fromDegrees(point.longitude, point.latitude, point.height)
 }
 
-function refreshPairEntities(pair: ControlPointPair) {
+function refreshPairEntities(
+  pair: ControlPointPair,
+  displayedModelPosition?: Cesium.Cartesian3,
+) {
   const viewer = props.viewer
   if (!viewer) return
   removePairEntities(pair.id)
   const entities: Cesium.Entity[] = []
   if (pair.modelPoint) {
+    const modelPosition = displayedModelPosition ?? geoPointToCartesian(pair.modelPoint)
     entities.push(viewer.entities.add({
-      position: geoPointToCartesian(pair.modelPoint),
+      position: modelPosition,
       point: { pixelSize: 11, color: Cesium.Color.RED, outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
     }))
   }
@@ -348,7 +366,7 @@ function refreshPairEntities(pair: ControlPointPair) {
     }))
   }
   if (pair.modelPoint && pair.targetPoint) {
-    const modelPosition = geoPointToCartesian(pair.modelPoint)
+    const modelPosition = displayedModelPosition ?? geoPointToCartesian(pair.modelPoint)
     const targetPosition = geoPointToCartesian(pair.targetPoint)
     const midpoint = Cesium.Cartesian3.midpoint(modelPosition, targetPosition, new Cesium.Cartesian3())
     entities.push(viewer.entities.add({
@@ -418,6 +436,7 @@ async function solveRegistration() {
       points,
     })
     solution.value = response.data.data as RegistrationSolution
+    applySolutionPreview(solution.value)
     ElMessage.success('纠偏矩阵计算完成，请检查误差后确认')
   } catch (error) {
     solution.value = undefined
@@ -428,15 +447,23 @@ async function solveRegistration() {
 }
 
 async function confirmRegistration() {
-  if (!props.context || !solution.value) return
+  if (!props.context || !solution.value || !loadedModel) return
   confirming.value = true
   try {
+    const correction = createYAxisForwardToXAxisForwardCorrection()
+    const transform = modelMatrixToTilesetTransform(
+      loadedModel.modelMatrix,
+      correction,
+    )
+    const transformValues = Cesium.Matrix4.toArray(transform)
+    const transformObject = Object.fromEntries(
+      transformValues.map((value, index) => [String(index), value]),
+    )
     await http.post(registrationApiPath('confirm'), {
       key: String(props.context.key),
-      translation: solution.value.translation,
-      quaternion: solution.value.quaternion,
+      transform: transformObject,
     })
-    ElMessage.success('模型纠偏参数已保存到 model_data')
+    ElMessage.success('模型纠偏矩阵已保存到 metadata.transform')
     cleanupRegistration()
     emit('completed')
     dialogVisible.value = false
@@ -445,6 +472,128 @@ async function confirmRegistration() {
   } finally {
     confirming.value = false
   }
+}
+
+function clearSolutionAndPreview() {
+  solution.value = undefined
+  if (loadedModel && baseModelMatrix) {
+    loadedModel.modelMatrix = Cesium.Matrix4.clone(
+      baseModelMatrix,
+      new Cesium.Matrix4(),
+    )
+    for (const pair of pointPairs.value) refreshPairEntities(pair)
+    props.viewer?.scene.requestRender()
+  }
+}
+
+function applySolutionPreview(value: RegistrationSolution) {
+  if (!loadedModel || !baseModelMatrix || !props.context) return
+
+  const center = props.context.center
+  const origin = Cesium.Cartesian3.fromDegrees(
+    center.longitude,
+    center.latitude,
+    center.height,
+  )
+  const enuMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(origin)
+  const inverseENU = Cesium.Matrix4.inverseTransformation(
+    enuMatrix,
+    new Cesium.Matrix4(),
+  )
+  const localBase = Cesium.Matrix4.multiply(
+    inverseENU,
+    baseModelMatrix,
+    new Cesium.Matrix4(),
+  )
+  const rotation = Cesium.Matrix3.fromQuaternion(new Cesium.Quaternion(
+    value.quaternion.x,
+    value.quaternion.y,
+    value.quaternion.z,
+    value.quaternion.w,
+  ))
+  const correction = Cesium.Matrix4.fromRotationTranslation(
+    rotation,
+    new Cesium.Cartesian3(
+      value.translation.x,
+      value.translation.y,
+      value.translation.z,
+    ),
+  )
+  const correctedLocal = Cesium.Matrix4.multiply(
+    correction,
+    localBase,
+    new Cesium.Matrix4(),
+  )
+  const correctedModelMatrix = Cesium.Matrix4.multiply(
+    enuMatrix,
+    correctedLocal,
+    new Cesium.Matrix4(),
+  )
+  loadedModel.modelMatrix = correctedModelMatrix
+  const inverseBase = Cesium.Matrix4.inverseTransformation(
+    baseModelMatrix,
+    new Cesium.Matrix4(),
+  )
+  const previewDelta = Cesium.Matrix4.multiply(
+    correctedModelMatrix,
+    inverseBase,
+    new Cesium.Matrix4(),
+  )
+  for (const pair of pointPairs.value) {
+    const displayedModelPosition = pair.modelPoint
+      ? Cesium.Matrix4.multiplyByPoint(
+        previewDelta,
+        geoPointToCartesian(pair.modelPoint),
+        new Cesium.Cartesian3(),
+      )
+      : undefined
+    refreshPairEntities(pair, displayedModelPosition)
+  }
+  props.viewer?.scene.requestRender()
+}
+
+function modelMatrixToTilesetTransform(
+  modelMatrix: Cesium.Matrix4,
+  axisCorrection?: Cesium.Matrix4,
+): Cesium.Matrix4 {
+  const finalMatrix = new Cesium.Matrix4()
+
+  if (axisCorrection) {
+    Cesium.Matrix4.multiply(modelMatrix, axisCorrection, finalMatrix)
+  } else {
+    Cesium.Matrix4.clone(modelMatrix, finalMatrix)
+  }
+
+  return finalMatrix
+}
+
+function createYAxisForwardToXAxisForwardCorrection(): Cesium.Matrix4 {
+  const axis3 = buildAxisCorrectionMatrix3(
+    new Cesium.Cartesian3(0, -1, 0),
+    new Cesium.Cartesian3(1, 0, 0),
+    new Cesium.Cartesian3(0, 0, 1),
+  )
+
+  return matrix3ToMatrix4(axis3)
+}
+
+function buildAxisCorrectionMatrix3(
+  xAxis: Cesium.Cartesian3,
+  yAxis: Cesium.Cartesian3,
+  zAxis: Cesium.Cartesian3,
+) {
+  const result = Cesium.Matrix3.clone(
+    Cesium.Matrix3.IDENTITY,
+    new Cesium.Matrix3(),
+  )
+  Cesium.Matrix3.setColumn(result, 0, xAxis, result)
+  Cesium.Matrix3.setColumn(result, 1, yAxis, result)
+  Cesium.Matrix3.setColumn(result, 2, zAxis, result)
+  return result
+}
+
+function matrix3ToMatrix4(matrix: Cesium.Matrix3) {
+  return Cesium.Matrix4.fromRotationTranslation(matrix)
 }
 
 function registrationApiPath(action: 'solve' | 'confirm') {
@@ -499,5 +648,14 @@ onBeforeUnmount(cleanupRegistration)
 
 .solution-errors b {
   color: var(--el-color-primary);
+}
+
+:global(.model-registration-overlay),
+:global(.model-registration-overlay .el-overlay-dialog) {
+  pointer-events: none !important;
+}
+
+:global(.model-registration-overlay .el-dialog) {
+  pointer-events: auto !important;
 }
 </style>
