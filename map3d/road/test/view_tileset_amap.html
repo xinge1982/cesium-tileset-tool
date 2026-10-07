@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>道路与标线 3DTiles 预览</title>
+  <style>
+    html, body, #container {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: "Microsoft YaHei", sans-serif;
+    }
+
+    .panel {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      z-index: 99;
+      width: 360px;
+      padding: 14px 16px;
+      border-radius: 10px;
+      background: rgba(18, 24, 38, 0.88);
+      color: #f5f7fa;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+    }
+
+    .panel h1 {
+      margin: 0 0 8px;
+      font-size: 18px;
+    }
+
+    .panel p,
+    .panel li {
+      margin: 6px 0;
+      line-height: 1.6;
+      font-size: 13px;
+    }
+
+    .panel code {
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .status {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+
+    .ok {
+      color: #7ee787;
+    }
+
+    .warn {
+      color: #ffd866;
+    }
+
+    .err {
+      color: #ff7b72;
+    }
+  </style>
+
+  <script>
+    window._AMapSecurityConfig = {
+      securityJsCode: "请替换成你的高德安全密钥"
+    };
+  </script>
+  <script src="https://webapi.amap.com/maps?v=2.0&key=请替换成你的高德Key&plugin=AMap.3DTilesLayer"></script>
+</head>
+<body>
+  <div id="container"></div>
+  <div class="panel">
+    <h1>道路与标线 3DTiles 预览</h1>
+    <p>本页直接加载当前目录下的 <code>tileset.json</code>。</p>
+    <p>如果页面空白，先检查：</p>
+    <ul>
+      <li>已替换高德 <code>key</code> 和 <code>securityJsCode</code></li>
+      <li>页面是通过 HTTP 服务访问，不是直接双击打开</li>
+      <li><code>tileset.json</code> 与 <code>roadsurface-road-and-marking.glb</code> 在同一目录</li>
+    </ul>
+    <div id="status" class="status warn">初始化中...</div>
+  </div>
+
+  <script>
+    const center = [117.32117679212537, 40.01843684894605];
+    const statusEl = document.getElementById("status");
+
+    function setStatus(text, cls) {
+      statusEl.className = "status " + cls;
+      statusEl.textContent = text;
+    }
+
+    function createMap() {
+      return new AMap.Map("container", {
+        viewMode: "3D",
+        pitch: 72,
+        rotation: 0,
+        zoom: 14,
+        center,
+        mapStyle: "amap://styles/normal"
+      });
+    }
+
+    async function checkTileset() {
+      const res = await fetch("./tileset.json", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error("tileset.json 请求失败: HTTP " + res.status);
+      }
+      return await res.json();
+    }
+
+    async function init() {
+      try {
+        if (!window.AMap || !AMap.Map || !AMap.3DTilesLayer) {
+          throw new Error("高德 JSAPI 或 AMap.3DTilesLayer 未正确加载");
+        }
+
+        const tileset = await checkTileset();
+        const map = createMap();
+
+        const layer = new AMap.3DTilesLayer({
+          url: "./tileset.json",
+          opacity: 1,
+          zIndex: 120,
+          zooms: [2, 22]
+        });
+
+        map.add(layer);
+        map.setCenter(center);
+        map.setZoomAndCenter(15, center);
+        map.setPitch(72);
+
+        setStatus(
+          "加载完成\\n" +
+          "tileset version: " + (tileset.asset && tileset.asset.version ? tileset.asset.version : "unknown") + "\\n" +
+          "content: roadsurface-road-and-marking.glb",
+          "ok"
+        );
+
+        window.__roadTilesetMap = map;
+        window.__roadTilesetLayer = layer;
+      } catch (err) {
+        console.error(err);
+        setStatus("加载失败\\n" + err.message, "err");
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

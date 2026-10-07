@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>&#36947;&#36335;&#19982;&#36335;&#32536;&#30707; Amap3D &#39044;&#35272;</title>
+    <script src="http://43.247.250.114:35005/Amap3D-1.134.1-metis/include.js" amapkey="UEfwEsH6kArzZJpMHJYbfg=="></script>
+    <style>
+        html, body, #map { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+        .toolbar { position: fixed; top: 10px; left: 10px; z-index: 99; color: #fff; padding: 12px 14px; border-radius: 8px; background: rgba(17, 24, 39, 0.82); font-family: "Microsoft YaHei", sans-serif; font-size: 13px; }
+        .toolbar label { margin-right: 10px; }
+        .status { position: fixed; left: 10px; bottom: 10px; z-index: 99; max-width: 480px; padding: 8px 10px; border-radius: 6px; background: rgba(255, 255, 255, 0.92); color: #111827; font-family: "Microsoft YaHei", sans-serif; font-size: 12px; white-space: pre-wrap; }
+        .feature-popup { position: fixed; top: 10px; right: 10px; z-index: 99; width: 380px; max-height: calc(100% - 20px); overflow: auto; display: none; border-radius: 8px; background: rgba(255, 255, 255, 0.97); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); color: #111827; font-family: "Microsoft YaHei", sans-serif; font-size: 12px; }
+        .feature-popup.visible { display: block; }
+        .feature-popup-header { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; font-weight: 700; }
+        .feature-popup-body { padding: 8px 12px 12px; }
+        .feature-popup-table { width: 100%; border-collapse: collapse; }
+        .feature-popup-table th, .feature-popup-table td { padding: 6px 4px; border-bottom: 1px solid #f3f4f6; text-align: left; vertical-align: top; word-break: break-all; }
+        .feature-popup-table th { width: 110px; color: #4b5563; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div class="toolbar">
+        <input id="imageryToggle" type="checkbox" checked><label for="imageryToggle">&#24433;&#20687;</label>
+        <input id="defaultToggle" type="checkbox"><label for="defaultToggle">&#40664;&#35748;</label>
+        <input id="localToggle" type="checkbox" checked><label for="localToggle">&#36947;&#36335;+&#26631;&#32447;+&#36335;&#32536;&#30707;+&#20854;&#23427;</label>
+        <input id="subgradeToggle" type="checkbox" checked><label for="subgradeToggle">&#36335;&#22522;(&#23454;&#39564;)</label>
+        <input id="curbToggle" type="checkbox"><label for="curbToggle">&#36335;&#32536;&#30707;</label>
+        <input id="newJerseyToggle" type="checkbox"><label for="newJerseyToggle">&#26032;&#27901;&#35199;&#25252;&#26639;</label>
+        <input id="guardrailToggle" type="checkbox"><label for="guardrailToggle">&#27874;&#24418;&#25252;&#26639;</label>
+    </div>
+    <div class="status" id="status">&#21021;&#22987;&#21270;&#20013;...</div>
+    <div class="feature-popup" id="featurePopup">
+        <div class="feature-popup-header" id="featurePopupTitle">&#35201;&#32032;&#23646;&#24615;</div>
+        <div class="feature-popup-body" id="featurePopupBody"></div>
+    </div>
+    <script>
+        const TEXT = {
+            noProps: "\u672a\u8bfb\u53d6\u5230\u5c5e\u6027",
+            popupTitle: "\u8981\u7d20\u5c5e\u6027",
+            noPick: "\u672a\u62fe\u53d6\u5230\u6a21\u578b\u8981\u7d20",
+            notFeature: "\u62fe\u53d6\u5230\u5bf9\u8c61\uff0c\u4f46\u4e0d\u662f\u53ef\u8bfb\u53d6\u5c5e\u6027\u7684\u6a21\u578b\u8981\u7d20",
+            noFeatureProps: "\u62fe\u53d6\u5230\u6a21\u578b\u8981\u7d20\uff0c\u4f46\u6ca1\u6709\u53ef\u8bfb\u5c5e\u6027",
+            picked: "\u5df2\u62fe\u53d6\u6a21\u578b\u8981\u7d20",
+            loaded: "\u5df2\u52a0\u8f7d\u56fe\u5c42: ",
+            loadFailed: "\u52a0\u8f7d\u56fe\u5c42\u5931\u8d25: ",
+            removed: "\u5df2\u79fb\u9664\u56fe\u5c42: ",
+            ready: "\u9875\u9762\u5df2\u521d\u59cb\u5316\uff0c\u70b9\u51fb\u6a21\u578b\u67e5\u770b\u5c5e\u6027"
+        };
+
+        var lng = 117.32117679212537;
+        var lat = 40.01843684894605;
+        var localTilesetUrl = "./tileset.json";
+        var subgradeTilesetUrl = "./roadsurface-subgrade-only.tileset.json";
+        var curbTilesetUrl = "./roadsurface-curb.tileset.json";
+        var newJerseyTilesetUrl = "./roadsurface-new-jersey.tileset.json";
+        var guardrailTilesetUrl = "./roadsurface-guardrail-wave.tileset.json";
+        var defaultTilesetUrl = "http://43.247.250.114:35005/tianjin_jinji/roadsurface/tileset.json";
+        var tilesets = {};
+        var imageryLayer = null;
+        var selectedFeature = null;
+        var selectedColor = null;
+
+        function setStatus(text) { document.getElementById("status").textContent = text; }
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/\"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+        function showPopup(title, props) {
+            var keys = Object.keys(props || {});
+            var body = document.getElementById("featurePopupBody");
+            document.getElementById("featurePopupTitle").textContent = title || TEXT.popupTitle;
+            if (!keys.length) {
+                body.innerHTML = "<div>" + TEXT.noProps + "</div>";
+            } else {
+                keys.sort();
+                var rows = keys.map(function (key) {
+                    return "<tr><th>" + escapeHtml(key) + "</th><td>" + escapeHtml(props[key]) + "</td></tr>";
+                }).join("");
+                body.innerHTML = '<table class="feature-popup-table"><tbody>' + rows + '</tbody></table>';
+            }
+            document.getElementById("featurePopup").classList.add("visible");
+        }
+        function hidePopup() {
+            document.getElementById("featurePopup").classList.remove("visible");
+            document.getElementById("featurePopupBody").innerHTML = "";
+        }
+        function clearSelection() {
+            if (selectedFeature && selectedColor) selectedFeature.color = selectedColor;
+            selectedFeature = null;
+            selectedColor = null;
+            hidePopup();
+        }
+        function highlightFeature(feature) {
+            clearSelection();
+            if (!feature || !("color" in feature)) return;
+            selectedFeature = feature;
+            selectedColor = feature.color;
+            feature.color = new Amap3D.Color(1.0, 0.35, 0.1, 1.0);
+        }
+        function extractProperties(feature) {
+            if (!feature) return null;
+            var ids = [];
+            if (typeof feature.getPropertyIds === "function") ids = feature.getPropertyIds([]) || [];
+            else if (typeof feature.getPropertyNames === "function") ids = feature.getPropertyNames() || [];
+            else return null;
+            var props = {};
+            for (var i = 0; i < ids.length; i++) props[ids[i]] = feature.getProperty(ids[i]);
+            return props;
+        }
+        function resolveFeature(picked) {
+            if (!picked) return null;
+            if (typeof picked.getPropertyIds === "function" || typeof picked.getPropertyNames === "function") return picked;
+            if (picked.feature && (typeof picked.feature.getPropertyIds === "function" || typeof picked.feature.getPropertyNames === "function")) return picked.feature;
+            if (picked.content && typeof picked.content.getFeature === "function" && typeof picked.featureId === "number") return picked.content.getFeature(picked.featureId);
+            return null;
+        }
+        function onPick(position) {
+            if (!position) return;
+            var picked = viewer.scene.pick(position);
+            if (!picked) {
+                clearSelection();
+                setStatus(TEXT.noPick);
+                return;
+            }
+            var feature = resolveFeature(picked);
+            if (!feature) {
+                clearSelection();
+                setStatus(TEXT.notFeature);
+                return;
+            }
+            var props = extractProperties(feature);
+            if (!props) {
+                clearSelection();
+                setStatus(TEXT.noFeatureProps);
+                return;
+            }
+            highlightFeature(feature);
+            var title = TEXT.popupTitle;
+            if (props.id !== undefined && props.id !== "") title += " - id: " + props.id;
+            showPopup(title, props);
+            setStatus(TEXT.picked);
+        }
+
+        var viewer = new Amap3D.Viewer("map", {
+            center: { target: [lng, lat, 0.0], offset: [0, -90, 1800] },
+            baseLayer: Amap3D.ImageryLayer.fromProviderAsync(new Amap3D.UrlTemplateImageryProvider({
+                url: "https://webst01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=6&x={x}&y={y}&z={z}",
+                maximumLevel: 16
+            })),
+            timeline: false
+        });
+        var center = Amap3D.Cartesian3.fromDegrees(lng, lat);
+        viewer.camera.lookAt(center, new Amap3D.Cartesian3(0, -1500, 1200.0));
+        viewer.camera.lookAtTransform(Amap3D.Matrix4.IDENTITY);
+
+        function addImagery() {
+            if (imageryLayer) return;
+            var provider = new Amap3D.UrlTemplateImageryProvider({
+                maximumLevel: 16,
+                url: "https://webst01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=6&x={x}&y={y}&z={z}"
+            });
+            imageryLayer = Amap3D.ImageryLayer.fromProviderAsync(provider);
+            viewer.imageryLayers.add(imageryLayer);
+        }
+        function removeImagery() {
+            viewer.imageryLayers.removeAll();
+            imageryLayer = null;
+        }
+        function addTileset(key, url, opts) {
+            opts = opts || {};
+            opts.enableDebugWireframe=true
+            if (tilesets[key]) return;
+            Amap3D.Cesium3DTileset.fromUrl(url, opts || {}).then(function (tileset) {
+                viewer.scene.primitives.add(tileset);
+                tilesets[key] = tileset;
+                if (viewer.zoomTo) viewer.zoomTo(tileset);
+               // tileset.debugWireframe = true;
+                setStatus(TEXT.loaded + key);
+            }).catch(function (err) {
+                setStatus(TEXT.loadFailed + key + "\n" + (err && err.message ? err.message : err));
+                console.error(err);
+            });
+        }
+        function removeTileset(key) {
+            if (!tilesets[key]) return;
+            viewer.scene.primitives.remove(tilesets[key]);
+            delete tilesets[key];
+            clearSelection();
+            setStatus(TEXT.removed + key);
+        }
+
+        document.getElementById("imageryToggle").addEventListener("change", function (event) {
+            if (event.target.checked) addImagery(); else removeImagery();
+        });
+        document.getElementById("defaultToggle").addEventListener("change", function (event) {
+            if (event.target.checked) {
+                addTileset("default", defaultTilesetUrl, {
+                    enableDebugWireframe: false,
+                    modelForwardAxis: Amap3D.Axis.Y,
+                    modelUpAxis: Amap3D.Axis.Z
+                });
+            } else {
+                removeTileset("default");
+            }
+        });
+        document.getElementById("localToggle").addEventListener("change", function (event) {
+            if (event.target.checked) addTileset("local", localTilesetUrl, { enableDebugWireframe: false });
+            else removeTileset("local");
+        });
+        document.getElementById("subgradeToggle").addEventListener("change", function (event) {
+            if (event.target.checked) addTileset("subgrade", subgradeTilesetUrl, { enableDebugWireframe: false });
+            else removeTileset("subgrade");
+        });
+        document.getElementById("curbToggle").addEventListener("change", function (event) {
+            if (event.target.checked) addTileset("curb", curbTilesetUrl, { enableDebugWireframe: false });
+            else removeTileset("curb");
+        });
+        document.getElementById("newJerseyToggle").addEventListener("change", function (event) {
+            if (event.target.checked) addTileset("newJersey", newJerseyTilesetUrl, { enableDebugWireframe: false });
+            else removeTileset("newJersey");
+        });
+        document.getElementById("guardrailToggle").addEventListener("change", function (event) {
+            if (event.target.checked) addTileset("guardrail", guardrailTilesetUrl, { enableDebugWireframe: false });
+            else removeTileset("guardrail");
+        });
+
+        var handler = new Amap3D.ScreenSpaceEventHandler(viewer.scene.canvas);
+        handler.setInputAction(function (movement) { onPick(movement.position); }, Amap3D.ScreenSpaceEventType.LEFT_CLICK);
+
+        addTileset("local", localTilesetUrl, { enableDebugWireframe: false });
+        addTileset("subgrade", subgradeTilesetUrl, { enableDebugWireframe: false });
+        setStatus(TEXT.ready);
+    </script>
+</body>
+</html>

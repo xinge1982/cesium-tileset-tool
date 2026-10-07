@@ -1,0 +1,697 @@
+﻿# road API ??
+
+????? `C:\MapABC\code\map-tool\map3d\road` ?? API????????????????????? GeoJSON ??? GLB / 3D Tiles?
+
+?????UTF-8 with BOM
+
+---
+
+## 1. ???????
+
+- ????`C:\MapABC\code\map-tool\map3d\road\roadsurface.go`
+- ?? API?`C:\MapABC\code\map-tool\map3d\road\roadsurface_api.go`
+- 3D Tiles ???`C:\MapABC\code\map-tool\map3d\road\tileset_builder.go`
+- ?????`C:\MapABC\code\map-tool\map3d\road\common`
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins`
+- ???????`C:\MapABC\code\map-tool\map3d\road\roadsurface_plugin_test.go`
+
+?????
+
+- `NewRoadTileBuilder(ctx TileContext, opt *BuildOptions) (*RoadTileBuilder, error)`
+- `(*RoadTileBuilder).AddSurfaceFeatures(features ...SurfaceFeature)`
+- `(*RoadTileBuilder).AddLineFeatures(features ...LineFeature)`
+- `(*RoadTileBuilder).AddCenterlineFeatures(features ...CenterlineFeature)`
+- `(*RoadTileBuilder).BuildBinary() ([]byte, error)`
+- `WriteTilesetJSONForGLB(opt TilesetBuildOptions) error`
+
+---
+
+## 2. ????
+
+???????? + ???????
+
+???
+
+- `BuildType` ????????
+- `Fields["feature_type"]` ????????
+
+??? `BuildType`?
+
+- `road_surface`
+- `road_subgrade`
+- `road_raised_surface`
+- `road_mark_surface`
+- `road_marking`
+- `road_expansion_joint`
+- `road_curb`
+- `linear_instanced_model`
+- `barrier_rigid`
+- `barrier_wave`
+- `barrier_noise_wall`
+
+???
+
+- ???? `road_greenbelt`?`barrier_new_jersey`?`barrier_guardrail_two_wave` ????????????????
+- ?????????? `BuildType`
+
+---
+
+## 3. ??????
+
+### 3.1 TileContext
+
+```go
+type TileContext struct {
+    TileID    string
+    Region    [6]float64
+    Center    [3]float64
+    BasePoint []float64
+    SRID      int
+    UseENU    bool
+}
+```
+
+???
+
+- `BasePoint` ????`RoadTileBuilder` ?????????????????????
+- `Region`?`Center` ??????????
+- ?????? `4326`???? `UseENU=true`
+
+### 3.2 BuildOptions
+
+```go
+type BuildOptions struct {
+    ClipToTile         bool
+    BuildNormals       bool
+    MergePrimitives    bool
+    IncludeBottom      bool
+    DefaultThickness   float32
+    DefaultHeight      float32
+    UseInputCenterline bool
+    LineProjectionMode string
+    LineSampleStep     float32
+    MarkingSampleStep  float32
+    ProjectSearchDist  float32
+    ProjectSmoothMeter float64
+}
+```
+
+????
+
+- `MergePrimitives`???????
+- `UseInputCenterline`???????????????
+- `ProjectSearchDist`??? / ??????????????
+- `LineProjectionMode`?????????????
+  - `fast`??????????????????
+  - `boundary_split`?????????????????
+- `LineSampleStep`???????????????? `6.0m`
+  - `= 0`??????
+  - `> 0`?????????
+- `MarkingSampleStep`????????????? `LineSampleStep`
+
+??????
+
+- `LineProjectionMode = "fast"`
+- `LineSampleStep = 6.0`
+- `MarkingSampleStep = 6.0`
+
+### 3.3 FeatureInput
+
+```go
+type FeatureInput struct {
+    BuildType BuildType
+    Geom      geom.T
+    Fields    FeatureFields
+    Features  []FeatureFields
+}
+```
+
+???
+
+- `BuildType`????????????
+- `Geom`?????? `4326` ??
+- `Fields`??????????????
+- `Features`?????? `EXT_mesh_features / EXT_structural_metadata`
+
+### 3.4 LineFeature
+
+```go
+type LineFeature struct {
+    FeatureInput
+    Width     float32
+    Height    float32
+    Thickness float32
+    Closed    bool
+    Material  MaterialSet
+    UV        UVOptions
+}
+```
+
+### 3.5 SurfaceFeature
+
+```go
+type SurfaceFeature struct {
+    FeatureInput
+    Height      float32
+    Thickness   float32
+    FloorHeight float32
+    Levels      int
+    Material    MaterialSet
+    UV          UVOptions
+}
+```
+
+### 3.6 UVOptions
+
+```go
+type UVOptions struct {
+    Mapping       UVMapping
+    RepeatX       float32
+    RepeatY       float32
+    RotateDeg     float32
+    FlipV         bool
+    ScaleByMeters bool
+}
+```
+
+???
+
+- `Mapping`?`planar` / `strip` / `sweep`
+- `RepeatX` / `RepeatY`???????
+- `RotateDeg`????????????????????
+- `FlipV`????? V ??
+- `ScaleByMeters`?????????? UV
+
+?????
+
+- ????????????? API
+- ?????? `feature.UV.RotateDeg` ??
+- ?? GeoJSON ??????? `Fields` ???
+  - `uv_rotate_deg`
+  - `texture_rotate_deg`
+  - `uv_rotate`
+
+### 3.7 ????
+
+?????????????????
+
+- `[]*gltf.Primitive`
+- ???????? `gltf.Document` ?????????????????? `BuildBinary()` ???? `GLB`
+
+?????
+
+- `*.glb`
+- `tileset.json`
+
+---
+
+## 4. ???? / ????
+
+### 4.1 road_surface
+
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins\road_surface`
+- ?????`Polygon` / `MultiPolygon`
+- ?????`SurfaceFeature`
+- ?????
+  - `id`
+- ?????
+  - `feature_type=surface`
+- ?????
+  - `texture_path`
+  - `uv_repeat_x`
+  - `uv_repeat_y`
+- ???
+  - ?????? `[]*gltf.Primitive`
+  - ???????? GLB
+- ????????
+
+### 4.2 road_subgrade
+
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins\road_subgrade`
+- ?????`Polygon` / `MultiPolygon`
+- ?????`SurfaceFeature`
+- ?????
+  - `id`
+- ?????
+  - `feature_type=subgrade`
+- ?????
+  - `texture_path`
+  - `uv_repeat_x`
+  - `uv_repeat_y`
+- ???
+  - ?????? `[]*gltf.Primitive`
+  - ?????????????
+- ????????
+
+### 4.3 road_raised_surface
+
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins\road_raised_surface`
+- ?????`Polygon` / `MultiPolygon`
+- ?????`SurfaceFeature`
+- ?????
+  - `id`
+  - `height`
+  - `feature_type`
+- `feature_type` ????
+  - `greenbelt`
+  - `median_island`
+- ?????
+  - `top_texture_path`
+  - `side_texture_path`
+- ???
+  - ?? primitive
+  - ?? primitive
+  - ?????? GLB ??
+- ????????????????????
+
+### 4.4 road_mark_surface
+
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins\road_mark_surface`
+- ?????`Polygon` / `MultiPolygon`
+- ?????`SurfaceFeature`
+- ?????
+  - `id`
+- ?????
+  - `road_id`
+  - `color`
+- ???
+  - ????????? `[]*gltf.Primitive`
+  - ???????????
+- ???????????????
+
+### 4.5 road_marking
+
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins\road_marking`
+- ?????`LineString` / `MultiLineString`
+- ?????`LineFeature`
+- ?????
+  - `id`
+  - `width`
+  - `feature_type`
+- `feature_type` ????
+  - `solid`
+  - `dashed`
+- ?????????
+  - `dash_pattern`
+- ?????
+  - `startoffset`
+  - `color`
+  - `road_id`
+  - `projection_mode`
+- ???
+  - ??????? `[]*gltf.Primitive`
+  - ??????????????
+- ???????????????????
+
+### 4.6 road_expansion_joint
+
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins\road_expansion_joint`
+- ?????`LineString` / `MultiLineString`
+- ?????`LineFeature`
+- ?????
+  - `id`
+- ?????
+  - `width`
+  - `road_id`
+- ?????
+  - `projection_mode`
+- ???
+  - ?????????? `[]*gltf.Primitive`
+- ????????
+
+### 4.7 road_curb
+
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins\curb`
+- ?????`LineString` / `MultiLineString`
+- ?????`LineFeature`
+- ?????
+  - `id`
+- ?????
+  - `width`
+  - `height`
+- ?????
+  - `direction`
+  - `texture_path`
+- ???
+  - ??? sweep ?? `[]*gltf.Primitive`
+- ????????
+
+### 4.8 linear_instanced_model
+
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins\linear_instanced_model`
+- ?????`LineString` / `MultiLineString`
+- ?????`LineFeature`
+- ?????
+  - `id`
+  - `feature_type`
+  - `model_code`
+- ?????
+  - `spacing`
+  - `startoffset`
+  - `scale_x`
+  - `scale_y`
+  - `scale_z`
+  - `offset_x`
+  - `offset_y`
+  - `offset_z`
+  - `yaw_offset`
+- ???
+  - ??????????
+  - ??? feature metadata
+- ?????????????????? GLB ??
+
+### 4.9 barrier_rigid
+
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins\barrier_rigid`
+- ?????`LineString` / `MultiLineString`
+- ?????`LineFeature`
+- ?????
+  - `id`
+  - `feature_type`
+- `feature_type` ????
+  - `new_jersey`
+  - `concrete_wall`
+- ?????
+  - `width`
+  - `height`
+- ?????
+  - `direction`
+  - `barrier_width`
+  - `barrier_height`
+- ???
+  - profile sweep ??????? `[]*gltf.Primitive`
+- ????????????????
+
+### 4.10 barrier_wave
+
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins\barrier_wave`
+- ?????`LineString` / `MultiLineString`
+- ?????`LineFeature`
+- ?????
+  - `id`
+  - `feature_type`
+- `feature_type` ????
+  - `wave_two`
+  - `wave_three`
+  - `wave_nose_end`
+- ?????
+  - `rail_height`
+  - `rail_height_all`
+- ?????
+  - `direction`
+  - `texture_path`
+  - `uv_rotate_deg`
+- ???
+  - ??? primitive
+  - ??????
+  - ???????
+- ?????????????????
+- ???
+  - ????????????? + `DoubleSided`
+  - ??????????? `45?`
+  - ???? `UV.RotateDeg` ??? `uv_rotate_deg` ??
+
+### 4.11 barrier_noise_wall
+
+- ?????`C:\MapABC\code\map-tool\map3d\road\plugins\noise_wall`
+- ?????`LineString` / `MultiLineString`
+- ?????`LineFeature`
+- ?????
+  - `id`
+  - `height`
+- ?????
+  - `bend_offset`
+  - `spacing`
+  - `post_width`
+  - `post_depth`
+  - `direction`
+  - `texture_path`
+- ???
+  - ????? primitive
+  - ??????
+- ????????
+
+---
+
+## 5. ??
+
+### 5.1 ???????? + ?? + ????? GLB
+
+```go
+builder, err := NewRoadTileBuilder(ctx, nil)
+if err != nil {
+    panic(err)
+}
+
+builder.AddSurfaceFeatures(
+    SurfaceFeature{
+        FeatureInput: FeatureInput{
+            BuildType: BuildTypeRoadSurface,
+            Geom:      roadGeom,
+            Fields: FeatureFields{
+                "id":           1001,
+                "feature_type": "surface",
+            },
+        },
+        Material: MaterialSet{
+            Top: MaterialRef{Path: `C:\MapABC\code\map-tool\map3d\resources\road\lm.jpeg`, Mode: MaterialModeTexture, DoubleSided: true},
+        },
+        UV: UVOptions{Mapping: UVMappingPlanar, RepeatX: 8, RepeatY: 8, FlipV: true, ScaleByMeters: true},
+    },
+)
+
+builder.AddSurfaceFeatures(
+    SurfaceFeature{
+        FeatureInput: FeatureInput{
+            BuildType: BuildTypeRoadSubgrade,
+            Geom:      subgradeGeom,
+            Fields: FeatureFields{
+                "id":           2001,
+                "feature_type": "subgrade",
+            },
+        },
+        Material: MaterialSet{
+            Top: MaterialRef{Path: `C:\MapABC\code\map-tool\map3d\resources\road\lj.jpeg`, Mode: MaterialModeTexture, DoubleSided: true},
+        },
+        UV: UVOptions{Mapping: UVMappingPlanar, RepeatX: 8, RepeatY: 8, FlipV: true, ScaleByMeters: true},
+    },
+)
+
+builder.AddLineFeatures(
+    LineFeature{
+        FeatureInput: FeatureInput{
+            BuildType: BuildTypeRoadMarking,
+            Geom:      markingGeom,
+            Fields: FeatureFields{
+                "id":           3001,
+                "feature_type": "solid",
+                "width":        0.15,
+            },
+        },
+        Material: MaterialSet{
+            Top: MaterialRef{Name: "road-marking", Color: "#FFFFFF", Mode: MaterialModeColor, DoubleSided: true},
+        },
+        UV: UVOptions{Mapping: UVMappingStrip},
+    },
+)
+
+glb, err := builder.BuildBinary()
+if err != nil {
+    panic(err)
+}
+_ = glb
+```
+
+### 5.2 ?????????
+
+```go
+feature := LineFeature{
+    FeatureInput: FeatureInput{
+        BuildType: BuildTypeBarrierRigid,
+        Geom:      lineGeom,
+        Fields: FeatureFields{
+            "id":           2001,
+            "feature_type": "new_jersey",
+            "width":        0.72,
+            "height":       0.81,
+            "direction":    1,
+        },
+    },
+    Material: MaterialSet{
+        Side: MaterialRef{Path: `C:\MapABC\code\map-tool\map3d\resources\road\xzx.png`, Mode: MaterialModeTexture, DoubleSided: true},
+    },
+    UV: UVOptions{Mapping: UVMappingSweep, RotateDeg: 180},
+}
+```
+
+### 5.3 ?????????
+
+```go
+feature := LineFeature{
+    FeatureInput: FeatureInput{
+        BuildType: BuildTypeBarrierWave,
+        Geom:      lineGeom,
+        Fields: FeatureFields{
+            "id":              3001,
+            "feature_type":    "wave_three",
+            "rail_height":     0.83,
+            "rail_height_all": 0.41,
+        },
+    },
+    Material: MaterialSet{
+        Top:  MaterialRef{Path: `C:\MapABC\code\map-tool\map3d\resources\road\sbb.png`, Mode: MaterialModeTexture, DoubleSided: true},
+        Side: MaterialRef{Name: "guardrail-support", Color: "#8D949C", Mode: MaterialModeColor, DoubleSided: true},
+    },
+    UV: UVOptions{Mapping: UVMappingSweep},
+}
+```
+
+### 5.4 ??????????????
+
+```go
+feature := LineFeature{
+    FeatureInput: FeatureInput{
+        BuildType: BuildTypeBarrierWave,
+        Geom:      lineGeom,
+        Fields: FeatureFields{
+            "id":           3002,
+            "feature_type": "wave_nose_end",
+        },
+    },
+    Material: MaterialSet{
+        Top: MaterialRef{Path: `C:\MapABC\code\map-tool\map3d\resources\road\bd_01.png`, Mode: MaterialModeTexture, DoubleSided: true},
+    },
+    UV: UVOptions{Mapping: UVMappingSweep, RotateDeg: 45},
+}
+```
+
+### 5.5 ????????
+
+```go
+feature := LineFeature{
+    FeatureInput: FeatureInput{
+        BuildType: BuildTypeBarrierNoiseWall,
+        Geom:      lineGeom,
+        Fields: FeatureFields{
+            "id":          4001,
+            "height":      3.5,
+            "bend_offset": 0.35,
+            "spacing":     2.0,
+        },
+    },
+    Material: MaterialSet{
+        Top: MaterialRef{Path: `C:\MapABC\code\map-tool\map3d\resources\road\spz_01.png`, Mode: MaterialModeTexture, DoubleSided: true},
+    },
+    UV: UVOptions{Mapping: UVMappingSweep, RepeatX: 2, RepeatY: 1},
+}
+```
+
+### 5.6 ??????? GeoJSON ????????
+
+```go
+fields := featureFieldsFromGeoJSON(props)
+
+feature := LineFeature{
+    FeatureInput: FeatureInput{
+        BuildType: BuildTypeRoadMarking,
+        Geom:      geomFromGeoJSON,
+        Fields: FeatureFields{
+            "id":           fields["id"],
+            "feature_type": "dashed",
+            "width":        fields["bxkd"],
+            "dash_pattern": fields["bxbl"],
+            "color":        fields["ys"],
+            "startoffset":  fields["startoffset"],
+            "road_id":      fields["ldid"],
+        },
+    },
+}
+```
+
+### 5.7 ????? tileset.json
+
+```go
+err := WriteTilesetJSONForGLB(TilesetBuildOptions{
+    GLBPath:     `C:\MapABC\code\map-tool\map3d\road\roadsurface-road-solid-dashed.glb`,
+    TilesetPath: `C:\MapABC\code\map-tool\map3d\road\tileset.json`,
+    Region:      ctx.Region,
+    GeometricError: 100,
+})
+if err != nil {
+    panic(err)
+}
+```
+
+---
+
+## 6. ? PostGIS ????????????
+
+???
+
+- ????? `ST_Intersects(tile_geom, geom)` ????
+- ??????????????
+- ????????? `owner_tile_id = ???` ???
+
+???????
+
+- ??`ST_LineInterpolatePoint(geom, 0.5)`
+- ??`ST_PointOnSurface(geom)`
+
+???
+
+```sql
+-- ??????
+UPDATE road_surface a
+SET owner_tile_id = t.tile_id
+FROM tile_grid t
+WHERE ST_Intersects(t.geom, ST_PointOnSurface(a.geom));
+```
+
+```sql
+-- ??????
+UPDATE road_marking a
+SET owner_tile_id = t.tile_id
+FROM tile_grid t
+WHERE ST_Intersects(t.geom, ST_LineInterpolatePoint(a.geom, 0.5));
+```
+
+?????
+
+```sql
+SELECT * FROM road_surface WHERE owner_tile_id = :tile_id;
+SELECT * FROM road_marking WHERE owner_tile_id = :tile_id;
+```
+
+??? API ????
+
+- ?????????
+- ??? `ResolveTileContextAuto(...)` ???? `RoadTileBuilder` ???? `BasePoint / Region`
+- ????????? GLB ? `tileset.json`
+
+---
+
+## 7. ????????
+
+- ??????`C:\MapABC\code\map-tool\map3d\road\roadsurface_plugin_test.go`
+  - `TestRoadSurfaceSolidAndDashedMarkingsToGLBAndTileset`
+- ?????`TestGuardrailWaveToGLBAndTileset`
+- ?????`TestNewJerseyBarrierToGLBAndTileset`
+
+---
+
+## 8. ????????
+
+- ??????? `4326`
+- ???????
+  - `id`
+  - `feature_type`
+- ??????
+  - `height`
+  - `width`
+  - ????
+- ??????
+  - `direction`
+  - `spacing`
+  - `startoffset`
+  - `uv_rotate_deg`?????
+- ???? `road_id` / `ldid`??????????????????
