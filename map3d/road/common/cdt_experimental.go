@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"cdt-go/cdt"
+	"cesium-tileset-tool/map3d/road/cdt-go/cdt"
 )
 
 // 使用 CDT (Constrained Delaunay Triangulation)
