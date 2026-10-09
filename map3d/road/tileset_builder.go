@@ -207,7 +207,8 @@ func readLocalBoundsFromGLB(glbPath string) ([3]float64, [3]float64, error) {
 }
 
 func buildTilesetBox(minv, maxv [3]float64, opt TilesetBuildOptions) []float64 {
-	// GLB local axes are x=east, y=up, z=north; 3D Tiles box uses x=east, y=north, z=up.
+	// Cesium rotates glTF Y-up to tile Z-up: (x, y, z) -> (x, -z, y).
+	// Road GLBs use x=east, y=up, z=south; tile boxes use ENU axes.
 	spanX := maxv[0] - minv[0]
 	spanUp := maxv[1] - minv[1]
 	spanNorth := maxv[2] - minv[2]
@@ -217,7 +218,7 @@ func buildTilesetBox(minv, maxv [3]float64, opt TilesetBuildOptions) []float64 {
 	padUp := maxFloat64(opt.PaddingY, opt.MinPaddingY, spanUp*opt.PaddingRatioY)
 
 	cx := (minv[0] + maxv[0]) / 2
-	cnorth := (minv[2] + maxv[2]) / 2
+	cnorth := -(minv[2] + maxv[2]) / 2
 	cup := (minv[1] + maxv[1]) / 2
 	hx := spanX/2 + padX
 	hnorth := spanNorth/2 + padNorth

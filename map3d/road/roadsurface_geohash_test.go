@@ -107,6 +107,7 @@ func TestRoadSurfaceGeohashSlices(t *testing.T) {
 	root := tilesetJSON{Asset: tilesetAsset{Version: "1.1"}, GeometricError: 100, Root: tilesetRoot{Refine: "ADD", GeometricError: 100}}
 	var outputMin, outputMax [3]float64
 	haveBounds := false
+	var emittedDocs []*gltf.Document
 	clippedArea := 0.0
 	tileCount := 0
 	splitRoad := false
@@ -195,6 +196,8 @@ func TestRoadSurfaceGeohashSlices(t *testing.T) {
 		leaf.Root.Transform = nil
 		root.Root.Children = append(root.Root.Children, leaf.Root)
 		b := leaf.Root.BoundingVolume.Box
+		assertRoadGLBInsideTileBox(t, decoded, b)
+		emittedDocs = append(emittedDocs, decoded)
 		for axis := 0; axis < 3; axis++ {
 			lo, hi := b[axis]-b[3+axis*4], b[axis]+b[3+axis*4]
 			if !haveBounds || lo < outputMin[axis] {
@@ -224,6 +227,9 @@ func TestRoadSurfaceGeohashSlices(t *testing.T) {
 		b[3+i*4] = (outputMax[i] - outputMin[i]) / 2
 	}
 	root.Root.BoundingVolume.Box = b
+	for _, doc := range emittedDocs {
+		assertRoadGLBInsideTileBox(t, doc, b)
+	}
 	data, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		t.Fatal(err)

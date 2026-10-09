@@ -63,10 +63,13 @@ Use a fresh output directory when changing the bound to avoid old tile files.
   A convex polygon clipper splits triangles, interpolating positions, normals and
   UVs with float64 arithmetic before encoding float32 GLB attributes.
 - All output tiles share the source origin. The root transform is applied once;
-  children carry their own bounds and GLB content references.
+  children carry their own bounds and GLB content references. Road GLB axes are
+  east/up/south; Cesium converts these to east/north/up as `(x, -z, y)`.
+  Bounding boxes use the converted axes, including the negated north center.
 - The test verifies multiple nonempty tiles, a road spanning multiple tiles,
   vertices inside the projected cell (5 mm tolerance), total projected mesh area
-  conservation, GLB decoding and metadata presence.
+  conservation, GLB decoding and metadata presence. Every decoded GLB vertex,
+  after Cesium's Y-up to Z-up rotation, must fit both its child box and the root box.
 - `TestClipRoadSurfaceMeshPreservesSeamAttributes` checks an analytic sloped mesh:
   matching height/UV on a shared edge, area conservation, winding, disjoint cells,
   boundary-only contact and reversed clipping polygon winding.
