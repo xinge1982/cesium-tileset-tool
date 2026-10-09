@@ -14,6 +14,7 @@ import (
 
 	"cesium-tileset-tool/map3d/road/common"
 	"cesium-tileset-tool/mapmodel/aabb"
+
 	"github.com/mmcloughlin/geohash"
 	"github.com/qmuntal/gltf"
 	"github.com/twpayne/go-geom"
@@ -33,8 +34,8 @@ func TestRoadSurfaceGeohashSlices(t *testing.T) {
 		}
 		precision = parsed
 	}
-	roads := readFeatureCollectionForTest(t, filepath.Join("test", "road_face_wgs84.geojson"))
-	centerlines := readFeatureCollectionForTest(t, filepath.Join("test", "road_line.geojson"))
+	roads := readFeatureCollectionForTest(t, filepath.Join("test", "jiangxi", "hd_424_dlm.geojson"))
+	centerlines := readFeatureCollectionForTest(t, filepath.Join("test", "jiangxi", "hdroad.geojson"))
 	boundValue := os.Getenv("MAP3D_TEST_BOUND")
 	if boundValue != "" {
 		bound, err := parseRoadSliceInputBound(boundValue)

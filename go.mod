@@ -3,7 +3,6 @@ module cesium-tileset-tool
 go 1.25.0
 
 require (
-	cesium-tileset-tool/map3d/road/cdt-go v0.0.0
 	github.com/ByteArena/poly2tri-go v0.0.0-20170716161910-d102ad91854f
 	github.com/deckarep/golang-set v1.8.0
 	github.com/enriquebris/goconcurrentqueue v0.7.0
@@ -102,5 +101,3 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
 )
-
-replace cesium-tileset-tool/map3d/road/cdt-go => ./map3d/road/cdt-go
