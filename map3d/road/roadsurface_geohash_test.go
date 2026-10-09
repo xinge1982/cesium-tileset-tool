@@ -3,17 +3,21 @@ package road
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	"cesium-tileset-tool/map3d/road/common"
 	"cesium-tileset-tool/mapmodel/aabb"
 	"github.com/mmcloughlin/geohash"
 	"github.com/qmuntal/gltf"
+	"github.com/twpayne/go-geom"
+	"github.com/twpayne/go-geom/encoding/geojson"
 )
 
 // TestRoadSurfaceGeohashSlices loads only road polygons and centerlines. Original
@@ -31,6 +35,20 @@ func TestRoadSurfaceGeohashSlices(t *testing.T) {
 	}
 	roads := readFeatureCollectionForTest(t, filepath.Join("test", "road_face_wgs84.geojson"))
 	centerlines := readFeatureCollectionForTest(t, filepath.Join("test", "road_line.geojson"))
+	boundValue := os.Getenv("MAP3D_TEST_BOUND")
+	if boundValue != "" {
+		bound, err := parseRoadSliceInputBound(boundValue)
+		if err != nil {
+			t.Fatalf("MAP3D_TEST_BOUND: %v", err)
+		}
+		roadCount, centerlineCount := len(roads.Features), len(centerlines.Features)
+		roads = filterRoadSliceInputBound(roads, bound)
+		centerlines = filterRoadSliceInputBound(centerlines, bound)
+		t.Logf("input_bound=%v roads=%d/%d centerlines=%d/%d", bound, len(roads.Features), roadCount, len(centerlines.Features), centerlineCount)
+		if len(roads.Features) == 0 {
+			t.Fatal("MAP3D_TEST_BOUND contains no complete road surface features")
+		}
+	}
 	base, region, err := calcTileContextFromFeatureCollections(roads, centerlines)
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +208,10 @@ func TestRoadSurfaceGeohashSlices(t *testing.T) {
 		tileCount++
 		t.Logf("geohash=%s primitives=%d glb_bytes=%d", hash, len(primitives), buffer.Len())
 	}
-	if tileCount < 2 || !splitRoad {
+	if tileCount == 0 {
+		t.Fatal("no nonempty road surface tiles generated")
+	}
+	if boundValue == "" && (tileCount < 2 || !splitRoad) {
 		t.Fatalf("expected multiple tiles and a split road: tiles=%d split=%v", tileCount, splitRoad)
 	}
 	// The projected cells must partition the source mesh without area loss/overlap.
@@ -271,5 +292,96 @@ func roadSliceAssertInside(t *testing.T, mesh common.RoadSurfaceMesh, boundary [
 				t.Fatalf("clipped vertex outside tile: %v distance=%f", p, distance)
 			}
 		}
+	}
+}
+
+// parseRoadSliceInputBound accepts WGS84 degrees in west,south,east,north order.
+func parseRoadSliceInputBound(value string) ([4]float64, error) {
+	var bound [4]float64
+	parts := strings.Split(value, ",")
+	if len(parts) != 4 {
+		return bound, fmt.Errorf("expected west,south,east,north")
+	}
+	for i, part := range parts {
+		number, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+		if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+			return bound, fmt.Errorf("coordinate %d must be finite", i+1)
+		}
+		bound[i] = number
+	}
+	if bound[0] < -180 || bound[2] > 180 || bound[1] < -90 || bound[3] > 90 || bound[0] >= bound[2] || bound[1] >= bound[3] {
+		return bound, fmt.Errorf("require -180 <= west < east <= 180 and -90 <= south < north <= 90")
+	}
+	return bound, nil
+}
+
+// filterRoadSliceInputBound keeps entire features, never clipped fragments.
+// Boundary contact is included; holes and all multipart components must fit.
+func filterRoadSliceInputBound(fc *geojson.FeatureCollection, bound [4]float64) *geojson.FeatureCollection {
+	filtered := *fc
+	filtered.Features = nil
+	for _, feature := range fc.Features {
+		if feature != nil && roadSliceGeometryInsideBound(feature.Geometry, bound) {
+			filtered.Features = append(filtered.Features, feature)
+		}
+	}
+	return &filtered
+}
+
+func roadSliceGeometryInsideBound(g geom.T, bound [4]float64) bool {
+	if g == nil {
+		return false
+	}
+	if collection, ok := g.(*geom.GeometryCollection); ok {
+		if collection.NumGeoms() == 0 {
+			return false
+		}
+		for i := 0; i < collection.NumGeoms(); i++ {
+			if !roadSliceGeometryInsideBound(collection.Geom(i), bound) {
+				return false
+			}
+		}
+		return true
+	}
+	flat, stride := g.FlatCoords(), g.Stride()
+	if stride < 2 || len(flat) == 0 || len(flat)%stride != 0 {
+		return false
+	}
+	for i := 0; i < len(flat); i += stride {
+		x, y := flat[i], flat[i+1]
+		if math.IsNaN(x) || math.IsNaN(y) || math.IsInf(x, 0) || math.IsInf(y, 0) || x < bound[0] || x > bound[2] || y < bound[1] || y > bound[3] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestRoadSliceInputBound(t *testing.T) {
+	bound, err := parseRoadSliceInputBound(" 120.9509,31.7113,121.0263,31.8967 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"", "1,2,3", "1,2,3,4,5", "bad,2,3,4", "NaN,2,3,4", "1,2,+Inf,4", "3,2,1,4", "1,4,3,2", "-181,2,3,4", "1,2,181,4", "1,-91,3,4", "1,2,3,91"} {
+		if _, err := parseRoadSliceInputBound(value); err == nil {
+			t.Errorf("invalid bound accepted: %q", value)
+		}
+	}
+	inside := geom.NewLineString(geom.XYZ).MustSetCoords([]geom.Coord{{bound[0], bound[1], 12}, {bound[2], bound[3], 15}})
+	crossing := geom.NewLineString(geom.XYZ).MustSetCoords([]geom.Coord{{121, 31.8, 12}, {121.1, 31.8, 15}})
+	outside := geom.NewPointFlat(geom.XY, []float64{122, 32})
+	fc := &geojson.FeatureCollection{Features: []*geojson.Feature{{Geometry: inside}, {Geometry: crossing}, {Geometry: outside}, {}}}
+	filtered := filterRoadSliceInputBound(fc, bound)
+	if len(filtered.Features) != 1 || filtered.Features[0] != fc.Features[0] || len(fc.Features) != 4 {
+		t.Fatal("bound must retain only complete contained features without mutating input")
+	}
+	multipart := geom.NewMultiLineString(geom.XYZ)
+	if err := multipart.Push(inside); err != nil {
+		t.Fatal(err)
+	}
+	if err := multipart.Push(crossing); err != nil {
+		t.Fatal(err)
+	}
+	if roadSliceGeometryInsideBound(multipart, bound) {
+		t.Fatal("multipart geometry crossing bound accepted")
 	}
 }

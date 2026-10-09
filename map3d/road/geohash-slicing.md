@@ -33,6 +33,27 @@ and old output files are not removed. Without the output environment variable,
 files are written into a temporary test directory and removed after the test.
 Precision defaults to 6; the test accepts 4 through 7.
 
+### Optional input bound
+
+`MAP3D_TEST_BOUND` accepts WGS84 degrees as `west,south,east,north`:
+
+```powershell
+$env:MAP3D_TEST_BOUND = "120.9509,31.7113,121.0263,31.8967"
+```
+
+Both road polygons and centerlines are filtered **before** calculating the source
+frame, triangulating or enumerating tiles. Only entire features contained in the
+rectangle are kept, including boundary contact. Crossing features are excluded,
+not clipped to this input bound. All components and holes must fit. An unset
+variable retains the original full-input behavior. Invalid bounds or a bound
+containing no complete road polygons fail with a clear message; zero retained
+centerlines is allowed and existing triangulation fallbacks remain available.
+A bounded selection may legitimately produce just one tile or no split road.
+
+The Shanghai example above does not overlap the bundled Beijing-area fixtures.
+For a subset of the bundled inputs, use `117.29,39.98,117.35,40.05`.
+Use a fresh output directory when changing the bound to avoid old tile files.
+
 ## Implementation and checks
 
 - `common/road_surface_mesh.go` extracts geometry generation and document writing
