@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"cdt-go/cdt"
+	"cesium-tileset-tool/map3d/road/cdt-go/cdt"
 )
 
 func main() {

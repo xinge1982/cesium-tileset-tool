@@ -1361,56 +1361,17 @@ func buildUnitCylinderPrimitive(doc *gltf.Document, material int, segments int) 
 // 构建道路顶面并将其缓存到 RoadSurfaceProjector。
 // 会根据道路 ID 获取中心线，选择合适的三角化策略生成道路 Mesh，同时按米制尺度生成 UV，并保存三角网供后续标线、路面符号投影使用。
 func (b *SurfaceBuilder) BuildRoadSurface(feature SurfaceFeature, rings []LocalRings) ([]*gltf.Primitive, error) {
-	if len(rings) == 0 {
-		return nil, fmt.Errorf("road surface rings are empty")
-	}
-
-	materialSet := feature.Material
-	materialSet.Top.DoubleSided = true
-	materials, err := b.materials.ResolveMaterialSet(materialSet)
+	meshes, err := b.BuildRoadSurfaceMeshes(feature, rings)
 	if err != nil {
 		return nil, err
 	}
-
-	repeatMetersX := feature.UV.RepeatX
-	repeatMetersY := feature.UV.RepeatY
-	if repeatMetersX <= 0 {
-		repeatMetersX = 8
-	}
-	if repeatMetersY <= 0 {
-		repeatMetersY = repeatMetersX
-	}
-
 	roadID := featureFieldInt64(feature.Fields, "road_id")
-	primitives := make([]*gltf.Primitive, 0, len(rings))
-	var centerline LocalLine
-	var hasCenterline bool
-	if b.projector != nil {
-		centerline, hasCenterline = b.projector.RoadCenterline(roadID)
-	}
-	for _, ring := range rings {
-		var (
-			pos     [][3]float32
-			indices []uint32
-			err     error
-		)
-		pos, indices, err = triangulateRoadSurfaceRing(ring, centerline, hasCenterline)
-		if err != nil {
-			return nil, err
-		}
+	for _, mesh := range meshes {
 		if b.projector != nil {
-			b.projector.AddRoadSurface(roadID, pos, indices)
+			b.projector.AddRoadSurface(roadID, mesh.Positions, mesh.Indices)
 		}
-
-		top, err := buildPlanarSurfacePrimitiveMeters(b.doc, pos, indices, materials.Top, repeatMetersX, repeatMetersY, feature.UV.FlipV)
-		if err != nil {
-			return nil, err
-		}
-		b.attachFeatureMetadata(top, len(pos), feature.FeatureInput)
-		primitives = append(primitives, top)
 	}
-
-	return primitives, nil
+	return b.WriteRoadSurfaceMeshes(feature, meshes)
 }
 
 // 构建道路路基表面。

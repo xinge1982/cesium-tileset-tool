@@ -1,4 +1,4 @@
-module cdt-go
+module cesium-tileset-tool/map3d/road/cdt-go
 
 go 1.25.0
 
