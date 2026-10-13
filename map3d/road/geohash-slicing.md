@@ -1,7 +1,8 @@
 # Road surface Geohash slicing prototype
 
-`TestRoadSurfaceGeohashSlices` loads `test/road_face_wgs84.geojson` and
-`test/road_line.geojson`, enables input centerlines, and builds road surfaces only.
+`TestRoadSurfaceGeohashSlices` calls the reusable `BuildRoadSurfaceGeohashSlices`
+API. By default it loads `test/road_face_wgs84.geojson` and `test/road_line.geojson`,
+enables input centerlines, and builds road surfaces only.
 It does not include markings, curbs, barriers, instanced models or LOD.
 
 The existing triangulation order is retained: CDT first, then centerline-based
@@ -91,3 +92,46 @@ CDT remains a native-library dependency. Its nested module is wired into the roo
 module with a local replace directive; run tests from a complete checkout containing
 `map3d/road/cdt-go`. The existing CDT loader uses its bundled DLL/SO and requires a
 compatible platform/native runtime.
+
+## Reuse from other Go modules
+
+The implementation lives in `roadsurface_geohash.go`; GeoJSON conversion helpers
+live in `roadsurface_geojson.go`. These regular Go files do not import `testing`
+or read environment variables. The test only loads fixtures, prepares options,
+and verifies results (including decoded content inside child/root boxes).
+
+After unmarshalling WGS84 GeoJSON into `*geojson.FeatureCollection` values:
+
+```go
+result, err := road.BuildRoadSurfaceGeohashSlices(roads, centerlines,
+    road.RoadSurfaceGeohashOptions{
+        OutputDir:   "output/roadsurface-geohash",
+        Precision:   6,
+        Bound:       "116.21079,28.68614,116.22241,28.69598",
+        TexturePath: "map3d/resources/road/lm.jpeg",
+    })
+if err != nil {
+    return err
+}
+fmt.Println(result.TilesetPath, len(result.Tiles))
+```
+
+`OutputDir` is the final tileset directory; the API does not append a subdirectory.
+Precision zero defaults to six. An empty bound retains all inputs. A nil
+centerline collection is allowed. `BuildOptions` optionally overrides mesh build
+settings; supplied centerlines remain enabled. Returned statistics include road
+and centerline counts, source/sliced area, whether a road spans multiple tiles,
+and each GLB's path, size and primitive count.
+
+Public helpers are `ParseRoadSurfaceBound`, `FilterRoadSurfaceInputBound`,
+`RoadSurfaceFeaturesFromGeoJSON` and `RoadCenterlineFeaturesFromGeoJSON`.
+
+To test with private Jiangxi data without changing source code:
+
+```powershell
+$env:MAP3D_TEST_ROAD_SURFACE_FILE = "D:/data/jiangxi/hd_424_dlm.geojson"
+$env:MAP3D_TEST_CENTERLINE_FILE = "D:/data/jiangxi/hdroad.geojson"
+$env:MAP3D_TEST_BOUND = "116.21079,28.68614,116.22241,28.69598"
+$env:MAP3D_TEST_OUTPUT_DIR = "D:/tileset-tests"
+go test ./map3d/road -run '^TestRoadSurfaceGeohashSlices$' -count=1 -v
+```

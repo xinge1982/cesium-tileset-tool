@@ -572,8 +572,8 @@ func TestRoadSurfaceAndRoadMarkingToGLB(t *testing.T) {
 		t.Fatalf("new road tile builder: %v", err)
 	}
 
-	builder.AddCenterlineFeatures(buildRoadCenterlineFeaturesForTest(centerlineFC)...)
-	builder.AddSurfaceFeatures(buildRoadSurfaceFeaturesForTest(roadFC, texturePath)...)
+	builder.AddCenterlineFeatures(RoadCenterlineFeaturesFromGeoJSON(centerlineFC)...)
+	builder.AddSurfaceFeatures(RoadSurfaceFeaturesFromGeoJSON(roadFC, texturePath)...)
 	markingFeatures := buildRoadMarkingFeaturesForTest(enrichedLineFC)
 	markLineFeaturesLowCost(markingFeatures)
 	builder.AddLineFeatures(markingFeatures...)
@@ -721,8 +721,8 @@ func TestRoadSurfaceSolidAndDashedMarkingsToGLBAndTileset(t *testing.T) {
 	t.Logf("phase=new_builder elapsed=%s", time.Since(phase))
 
 	phase = time.Now()
-	builder.AddCenterlineFeatures(buildRoadCenterlineFeaturesForTest(centerlineFC)...)
-	builder.AddSurfaceFeatures(buildRoadSurfaceFeaturesForTest(roadFC, texturePath)...)
+	builder.AddCenterlineFeatures(RoadCenterlineFeaturesFromGeoJSON(centerlineFC)...)
+	builder.AddSurfaceFeatures(RoadSurfaceFeaturesFromGeoJSON(roadFC, texturePath)...)
 	builder.AddSurfaceFeatures(buildRoadGreenbeltFeaturesForTest(greenbeltFC, greenbeltTexturePath)...)
 	builder.AddSurfaceFeatures(buildRoadMedianIslandFeaturesForTest(medianIslandFC, medianIslandTexturePath)...)
 	builder.AddSurfaceFeatures(buildRoadMarkSurfaceFeaturesForTest(markFC)...)
@@ -940,7 +940,7 @@ func TestRoadSurfaceSolidAndDashedMarkingsToGLBAndTileset_WithEstimatedCenterlin
 		t.Fatalf("calc tile context: %v", err)
 	}
 
-	surfaceFeatures := buildRoadSurfaceFeaturesForTest(roadFC, texturePath)
+	surfaceFeatures := RoadSurfaceFeaturesFromGeoJSON(roadFC, texturePath)
 	estimatedCenterlines := buildEstimatedRoadCenterlineFeaturesForTest(t, surfaceFeatures)
 
 	builder, err := NewRoadTileBuilder(TileContext{
@@ -1022,7 +1022,7 @@ func TestRoadSurfaceBuildBreakdownByPlugin(t *testing.T) {
 		t.Fatalf("calc tile context: %v", err)
 	}
 
-	surfaceFeatures := buildRoadSurfaceFeaturesForTest(roadFC, texturePath)
+	surfaceFeatures := RoadSurfaceFeaturesFromGeoJSON(roadFC, texturePath)
 	greenbeltFeatures := buildRoadGreenbeltFeaturesForTest(greenbeltFC, greenbeltTexturePath)
 	medianIslandFeatures := buildRoadMedianIslandFeaturesForTest(medianIslandFC, medianIslandTexturePath)
 	markSurfaceFeatures := buildRoadMarkSurfaceFeaturesForTest(markFC)
@@ -1032,7 +1032,7 @@ func TestRoadSurfaceBuildBreakdownByPlugin(t *testing.T) {
 	markLineFeaturesLowCost(expansionJointFeatures)
 	antiGlareFeatures := buildAntiGlareBoardFeaturesForTest(enrichedFxbFC, fxbModelPath, 1.0)
 	curbFeatures := buildRoadCurbFeaturesForTest(enrichedCurbFC, curbTexturePath)
-	centerlines := buildRoadCenterlineFeaturesForTest(centerlineFC)
+	centerlines := RoadCenterlineFeaturesFromGeoJSON(centerlineFC)
 
 	type caseSpec struct {
 		name     string
@@ -1175,8 +1175,8 @@ func TestRoadSurfaceAndSingleMarking14011003011ToGLB(t *testing.T) {
 		t.Fatalf("new road tile builder: %v", err)
 	}
 
-	builder.AddCenterlineFeatures(buildRoadCenterlineFeaturesForTest(filteredCenterlineFC)...)
-	builder.AddSurfaceFeatures(buildRoadSurfaceFeaturesForTest(filteredRoadFC, texturePath)...)
+	builder.AddCenterlineFeatures(RoadCenterlineFeaturesFromGeoJSON(filteredCenterlineFC)...)
+	builder.AddSurfaceFeatures(RoadSurfaceFeaturesFromGeoJSON(filteredRoadFC, texturePath)...)
 	builder.AddLineFeatures(buildRoadMarkingFeaturesForTest(filteredLineFC)...)
 
 	glb, err := builder.BuildBinary()
@@ -1235,7 +1235,7 @@ func TestRoadSurface14241000124_CDTToGLB(t *testing.T) {
 		t.Fatalf("target road not found: %d", targetRoadID)
 	}
 
-	surface := buildRoadSurfaceFeaturesForTest(&geojson.FeatureCollection{Features: []*geojson.Feature{targetFeature}}, texturePath)
+	surface := RoadSurfaceFeaturesFromGeoJSON(&geojson.FeatureCollection{Features: []*geojson.Feature{targetFeature}}, texturePath)
 	if len(surface) != 1 {
 		t.Fatalf("expected one target surface")
 	}
@@ -1305,56 +1305,6 @@ func TestRoadSurface14241000124_CDTToGLB(t *testing.T) {
 	}
 }
 
-func calcTileContextFromFeatureCollection(fc *geojson.FeatureCollection) ([]float64, [6]float64, error) {
-	return calcTileContextFromFeatureCollections(fc)
-}
-
-func calcTileContextFromFeatureCollections(collections ...*geojson.FeatureCollection) ([]float64, [6]float64, error) {
-	var region [6]float64
-	minLon, minLat := math.Inf(1), math.Inf(1)
-	maxLon, maxLat := math.Inf(-1), math.Inf(-1)
-
-	for _, fc := range collections {
-		if fc == nil {
-			continue
-		}
-		for i := range fc.Features {
-			g := fc.Features[i].Geometry
-			if g == nil {
-				continue
-			}
-			flat := g.FlatCoords()
-			stride := g.Stride()
-			if stride < 2 {
-				continue
-			}
-			for j := 0; j+stride-1 < len(flat); j += stride {
-				lon := flat[j]
-				lat := flat[j+1]
-				if lon < minLon {
-					minLon = lon
-				}
-				if lon > maxLon {
-					maxLon = lon
-				}
-				if lat < minLat {
-					minLat = lat
-				}
-				if lat > maxLat {
-					maxLat = lat
-				}
-			}
-		}
-	}
-	if math.IsInf(minLon, 0) || math.IsInf(minLat, 0) || math.IsInf(maxLon, 0) || math.IsInf(maxLat, 0) {
-		return nil, region, os.ErrInvalid
-	}
-
-	basePoint := []float64{(minLon + maxLon) / 2, (minLat + maxLat) / 2, 0}
-	region = [6]float64{minLon, minLat, maxLon, maxLat, 0, 0}
-	return basePoint, region, nil
-}
-
 func readFeatureCollectionForTest(t *testing.T, path string) *geojson.FeatureCollection {
 	t.Helper()
 
@@ -1371,33 +1321,6 @@ func readFeatureCollectionForTest(t *testing.T, path string) *geojson.FeatureCol
 		t.Fatalf("geojson has no features: %s", path)
 	}
 	return fc
-}
-
-func buildRoadSurfaceFeaturesForTest(fc *geojson.FeatureCollection, texturePath string) []SurfaceFeature {
-	features := make([]SurfaceFeature, 0, len(fc.Features))
-	for i := range fc.Features {
-		if fc.Features[i].Geometry == nil {
-			continue
-		}
-		fields := featureFieldsFromGeoJSON(fc.Features[i].Properties)
-		fields["feature_type"] = "surface"
-		features = append(features, SurfaceFeature{
-			FeatureInput: FeatureInput{
-				BuildType: BuildTypeRoadSurface,
-				Geom:      fc.Features[i].Geometry,
-				Fields:    fields,
-				Features:  featureRowsFromGeoJSON(fc.Features[i].Properties, "road_surface"),
-			},
-			Thickness: 0,
-			Material: MaterialSet{
-				Top:    MaterialRef{Path: texturePath, Mode: MaterialModeTexture, DoubleSided: true},
-				Side:   MaterialRef{Path: texturePath, Mode: MaterialModeTexture, DoubleSided: true},
-				Bottom: MaterialRef{Path: texturePath, Mode: MaterialModeTexture, DoubleSided: true},
-			},
-			UV: UVOptions{Mapping: UVMappingPlanar, RepeatX: 8, RepeatY: 8, FlipV: true, ScaleByMeters: true},
-		})
-	}
-	return features
 }
 
 func buildRoadSubgradeFeaturesForTest(fc *geojson.FeatureCollection, texturePath string) []SurfaceFeature {
@@ -1514,28 +1437,6 @@ func buildRoadMarkSurfaceFeaturesForTest(fc *geojson.FeatureCollection) []Surfac
 				Top: MaterialRef{Name: "road-mark-surface", Color: roadMarkColor(fields), Mode: MaterialModeColor, DoubleSided: true},
 			},
 			UV: UVOptions{Mapping: UVMappingPlanar, RepeatX: 1, RepeatY: 1, FlipV: false},
-		})
-	}
-	return features
-}
-
-func buildRoadCenterlineFeaturesForTest(fc *geojson.FeatureCollection) []CenterlineFeature {
-	features := make([]CenterlineFeature, 0, len(fc.Features))
-	for i := range fc.Features {
-		if fc.Features[i].Geometry == nil {
-			continue
-		}
-		fields := featureFieldsFromGeoJSON(fc.Features[i].Properties)
-		// The current test fixture reuses line data where the related road ID is stored in `ldid`.
-		// Normalize it so the projector can actually associate the reference line with the road.
-		if featureFieldInt64(fields, "hroad_id") == 0 && featureFieldInt64(fields, "road_id") == 0 {
-			if ldid := featureFieldInt64(fields, "ldid"); ldid != 0 {
-				fields["hroad_id"] = ldid
-			}
-		}
-		features = append(features, CenterlineFeature{
-			Geom:   fc.Features[i].Geometry,
-			Fields: fields,
 		})
 	}
 	return features
@@ -2167,20 +2068,6 @@ func markLineFeaturesLowCost(features []LineFeature) {
 	}
 }
 
-func featureFieldsFromGeoJSON(props map[string]interface{}) FeatureFields {
-	fields := make(FeatureFields, len(props))
-	for k, v := range props {
-		fields[k] = v
-	}
-	if _, ok := fields["id"]; !ok {
-		fields["id"] = ""
-	}
-	if _, ok := fields["name"]; !ok {
-		fields["name"] = ""
-	}
-	return fields
-}
-
 func roadMarkColor(fields FeatureFields) string {
 	switch featureFieldInt64(fields, "color") {
 	case 1:
@@ -2203,16 +2090,6 @@ func roadMarkColor(fields FeatureFields) string {
 		return "#FFFFFF"
 	default:
 		return "#FFFFFF"
-	}
-}
-
-func featureRowsFromGeoJSON(props map[string]interface{}, typeName string) []FeatureFields {
-	fields := featureFieldsFromGeoJSON(props)
-	return []FeatureFields{
-		{
-			"id":   fields["id"],
-			"type": typeName,
-		},
 	}
 }
 
