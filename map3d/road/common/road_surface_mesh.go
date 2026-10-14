@@ -164,8 +164,11 @@ func ClipRoadSurfaceMesh(mesh RoadSurfaceMesh, boundary [][2]float64) (RoadSurfa
 		// A fan preserves source winding. Skip boundary-only and zero-area fragments.
 		for j := 1; j+1 < len(polygon); j++ {
 			a, b, c := polygon[0], polygon[j], polygon[j+1]
-			cross := (b.pos[0]-a.pos[0])*(c.pos[2]-a.pos[2]) - (b.pos[2]-a.pos[2])*(c.pos[0]-a.pos[0])
-			if math.Abs(cross) < 1e-10 {
+			// Use true 3D area: vertical guardrail faces have zero XZ area.
+			u := [3]float64{b.pos[0] - a.pos[0], b.pos[1] - a.pos[1], b.pos[2] - a.pos[2]}
+			v := [3]float64{c.pos[0] - a.pos[0], c.pos[1] - a.pos[1], c.pos[2] - a.pos[2]}
+			x, y, z := u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]
+			if x*x+y*y+z*z < 1e-20 {
 				continue
 			}
 			for _, v := range []roadClipVertex{a, b, c} {

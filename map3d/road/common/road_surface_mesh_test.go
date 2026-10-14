@@ -79,3 +79,36 @@ func TestClipRoadSurfaceMeshRejectsInvalidInput(t *testing.T) {
 		t.Fatal("degenerate boundary accepted")
 	}
 }
+
+// Vertical faces must survive a horizontal cell cut, with interpolated UVs.
+func TestClipRoadSurfaceMeshPreservesVerticalFaces(t *testing.T) {
+	mesh := RoadSurfaceMesh{Positions: [][3]float32{{0, 0, 1}, {2, 0, 1}, {2, 1, 1}, {0, 1, 1}},
+		Normals: [][3]float32{{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}},
+		UVs:     [][2]float32{{0, 0}, {2, 0}, {2, 1}, {0, 1}}, Indices: []uint32{0, 1, 2, 0, 2, 3}}
+	area := 0.0
+	for _, boundary := range [][][2]float64{{{0, 0}, {1, 0}, {1, 2}, {0, 2}}, {{1, 0}, {2, 0}, {2, 2}, {1, 2}}} {
+		cut, err := ClipRoadSurfaceMesh(mesh, boundary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cut.Indices) == 0 {
+			t.Fatal("vertical face was discarded")
+		}
+		for i, p := range cut.Positions {
+			if cut.UVs[i] != [2]float32{p[0], p[1]} {
+				t.Fatal("vertical seam UV changed")
+			}
+		}
+		for i := 0; i < len(cut.Indices); i += 3 {
+			a, b, c := cut.Positions[cut.Indices[i]], cut.Positions[cut.Indices[i+1]], cut.Positions[cut.Indices[i+2]]
+			cross := float64((b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]))
+			if cross <= 0 {
+				t.Fatal("vertical face winding changed")
+			}
+			area += cross / 2
+		}
+	}
+	if math.Abs(area-2) > 1e-6 {
+		t.Fatalf("vertical area changed: %f", area)
+	}
+}
