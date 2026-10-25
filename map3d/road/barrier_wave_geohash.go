@@ -24,6 +24,12 @@ import (
 type BarrierWaveGeohashOptions struct {
 	OutputDir string
 	Precision int
+	// Chains configures full-source endpoint connectivity; zero uses safe defaults.
+	Chains common.SidewallChainOptions
+	// DisableChains restores legacy per-part sampling.
+	DisableChains bool
+	// Bound keeps complete features AFTER computing full-source chain offsets.
+	Bound *[4]float64
 }
 
 type BarrierWaveGeohashResult struct {
@@ -58,6 +64,37 @@ func BuildBarrierWaveGeohashSlices(features []LineFeature, opt BarrierWaveGeohas
 	ctx, err := ResolveTileContextAuto(TileContext{TileID: "barrier-wave-source", SRID: 4326, UseENU: true}, nil, features, nil)
 	if err != nil {
 		return nil, err
+	}
+	if !opt.DisableChains {
+		coordinates, err := common.NewCoordinatePipeline(ctx)
+		if err != nil {
+			return nil, err
+		}
+		features, err = common.PrepareSidewallChains(features, coordinates, opt.Chains)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if opt.Bound != nil {
+		b := *opt.Bound
+		for _, v := range b {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return nil, fmt.Errorf("invalid bound")
+			}
+		}
+		if b[0] > b[2] || b[1] > b[3] {
+			return nil, fmt.Errorf("invalid bound")
+		}
+		selected := []LineFeature{}
+		for _, f := range features {
+			if roadSliceGeometryInsideBound(f.Geom, b) {
+				selected = append(selected, f)
+			}
+		}
+		features = selected
+		if len(features) == 0 {
+			return nil, fmt.Errorf("no barrier features inside bound")
+		}
 	}
 	options := DefaultBuildOptions()
 	options.MergePrimitives = false

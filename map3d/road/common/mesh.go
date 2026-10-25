@@ -754,7 +754,7 @@ func (b *SurfaceBuilder) BuildGuardrailTwoWave(feature LineFeature, lines []Loca
 
 	direction := guardrailDirection(feature.Fields)
 	railHeight, railHeightAll := guardrailRailHeights(feature.Fields, defaultGuardrailRailHeight, defaultGuardrailRailHeightAll)
-	for _, line := range lines {
+	for lineIndex, line := range lines {
 		pos, normals, uv, indices, err := buildGuardrailTwoWaveMesh(line, direction, railHeight, railHeightAll)
 		if err != nil {
 			return nil, err
@@ -769,7 +769,14 @@ func (b *SurfaceBuilder) BuildGuardrailTwoWave(feature LineFeature, lines []Loca
 		for _, idx := range indices {
 			batchIdx = append(batchIdx, base+idx)
 		}
-		supports, err := guardrailSupportTransforms(line)
+		var sampling *LineChainSampling
+		if len(feature.ChainSampling) > 0 {
+			if len(feature.ChainSampling) != len(lines) {
+				return nil, fmt.Errorf("guardrail chain part count changed")
+			}
+			sampling = &feature.ChainSampling[lineIndex]
+		}
+		supports, err := guardrailChainSupportTransforms(line, sampling)
 		if err != nil {
 			return nil, err
 		}
@@ -850,7 +857,7 @@ func (b *SurfaceBuilder) BuildGuardrailThreeWave(feature LineFeature, lines []Lo
 
 	direction := guardrailDirection(feature.Fields)
 	railHeight, railHeightAll := guardrailRailHeights(feature.Fields, defaultGuardrailThreeWaveRailHeight, defaultGuardrailThreeWaveRailHeightAll)
-	for _, line := range lines {
+	for lineIndex, line := range lines {
 		pos, normals, uv, indices, err := buildGuardrailThreeWaveMesh(line, direction, railHeight, railHeightAll)
 		if err != nil {
 			return nil, err
@@ -865,7 +872,14 @@ func (b *SurfaceBuilder) BuildGuardrailThreeWave(feature LineFeature, lines []Lo
 		for _, idx := range indices {
 			batchIdx = append(batchIdx, base+idx)
 		}
-		supports, err := guardrailSupportTransforms(line)
+		var sampling *LineChainSampling
+		if len(feature.ChainSampling) > 0 {
+			if len(feature.ChainSampling) != len(lines) {
+				return nil, fmt.Errorf("guardrail chain part count changed")
+			}
+			sampling = &feature.ChainSampling[lineIndex]
+		}
+		supports, err := guardrailChainSupportTransforms(line, sampling)
 		if err != nil {
 			return nil, err
 		}

@@ -198,6 +198,8 @@ func (f FeatureInput) Validate() error {
 // 瀹冨湪 FeatureInput 鐨勫熀纭€涓婏紝鍐嶈ˉ鍏呯嚎绫讳笓鏈夊弬鏁帮細
 // - 瀹藉害锛?// - 楂樺害锛?// - 鍘氬害锛?// - 鏄惁闂悎锛?// - 鏉愯川涓?UV銆?
 type LineFeature struct {
+	// ChainSampling is generated on the complete source before tile/bound filtering.
+	ChainSampling []LineChainSampling
 	FeatureInput
 	Width     float32
 	Height    float32

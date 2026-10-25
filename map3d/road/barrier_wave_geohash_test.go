@@ -2,9 +2,12 @@ package road
 
 import (
 	"encoding/json"
+	"github.com/mmcloughlin/geohash"
+	"github.com/twpayne/go-geom"
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -40,13 +43,7 @@ func TestBarrierWaveGeohashSlices(t *testing.T) {
 		}
 		fc := readFeatureCollectionForTest(t, path)
 		inputCount := len(fc.Features)
-		if value := os.Getenv("MAP3D_TEST_BOUND"); value != "" {
-			bound, err := ParseRoadSurfaceBound(value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			fc = FilterRoadSurfaceInputBound(fc, bound)
-		}
+
 		lines := spec.convert(fc, filepath.Join("..", "resources", "road", spec.texture))
 		for i := range lines {
 			fields := featureFieldsFromGeoJSON(lines[i].Fields)
@@ -61,7 +58,15 @@ func TestBarrierWaveGeohashSlices(t *testing.T) {
 	if out == "" {
 		out = t.TempDir()
 	}
-	result, err := BuildBarrierWaveGeohashSlices(features, BarrierWaveGeohashOptions{OutputDir: filepath.Join(out, "barrier-wave-geohash"), Precision: precision})
+	opt := BarrierWaveGeohashOptions{OutputDir: filepath.Join(out, "barrier-wave-geohash"), Precision: precision}
+	if value := os.Getenv("MAP3D_TEST_BOUND"); value != "" {
+		bound, err := ParseRoadSurfaceBound(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opt.Bound = &bound
+	}
+	result, err := BuildBarrierWaveGeohashSlices(features, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,5 +183,104 @@ func TestBarrierWaveSeamFaceHasSingleOwner(t *testing.T) {
 	}
 	if waveCellOwner([3]float32{1, 0, 1}, cells) != 0 {
 		t.Fatal("shared-edge support needs deterministic single ownership")
+	}
+}
+
+// Verify actual decoded GPU instance TRS values, not just counts. Bound builds
+// keep exactly the full-source phase, even when the chain root is outside.
+func TestBarrierWaveChainSliceTransformsAndBound(t *testing.T) {
+	box := geohash.BoundingBox(geohash.EncodeWithPrecision(31, 121, 6))
+	x := box.MaxLng
+	y := (box.MinLat + box.MaxLat) / 2
+	makeFeature := func(id int, a, b float64) LineFeature {
+		return LineFeature{FeatureInput: FeatureInput{BuildType: BuildTypeBarrierWave, Fields: FeatureFields{"id": id, "bxdl": 5, "direction": 2, "feature_type": "wave_two"}, Geom: geom.NewLineString(geom.XYZ).MustSetCoords([]geom.Coord{{a, y, 10}, {b, y, 10}})}}
+	}
+	features := []LineFeature{makeFeature(1, x-.00012, x-.00002), makeFeature(2, x-.00002, x+.00012)}
+	ctx, err := ResolveTileContextAuto(TileContext{TileID: "source", SRID: 4326, UseENU: true}, nil, features, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, err := common.NewCoordinatePipeline(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := common.PrepareSidewallChains(features, cp, common.SidewallChainOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared[0].ChainSampling[0].ChainID != prepared[1].ChainSampling[0].ChainID {
+		t.Fatal("fixture did not form a chain")
+	}
+	type trs struct {
+		T [3]float32
+		R [4]float32
+		S [3]float32
+	}
+	collect := func(doc *gltf.Document, out map[trs]int) {
+		t.Helper()
+		if err := waveNormalizeExtensions(doc); err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range doc.Nodes {
+			translations, rotations, scales, _, ok, err := readInstancedNodeAttributes(doc, n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok {
+				for i, p := range translations {
+					out[trs{p, rotations[i], scales[i]}]++
+				}
+			}
+		}
+	}
+	for _, bounded := range []bool{false, true} {
+		t.Run(strconv.FormatBool(bounded), func(t *testing.T) {
+			selected := prepared
+			opt := BarrierWaveGeohashOptions{OutputDir: t.TempDir(), Precision: 6}
+			if bounded {
+				b := [4]float64{x - .00002, y - .00001, x + .00013, y + .00001}
+				opt.Bound = &b
+				selected = prepared[1:]
+			}
+			buildOpt := DefaultBuildOptions()
+			buildOpt.MergePrimitives = false
+			builder, err := NewRoadTileBuilder(ctx, &buildOpt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			builder.AddLineFeatures(selected...)
+			source, _, err := builder.BuildDocument()
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := map[trs]int{}
+			collect(source, expected)
+			result, err := BuildBarrierWaveGeohashSlices(features, opt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bounded && len(result.Tiles) < 2 {
+				t.Fatal("fixture does not cross a tile seam")
+			}
+			got := map[trs]int{}
+			for _, tile := range result.Tiles {
+				doc, err := gltf.Open(tile.GLBPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				collect(doc, got)
+			}
+			if !reflect.DeepEqual(got, expected) {
+				t.Fatalf("instance TRS changed across slicing/bound: got %v want %v", got, expected)
+			}
+			for _, count := range got {
+				if count != 1 {
+					t.Fatal("duplicate support at joint/seam")
+				}
+			}
+			if bounded && prepared[1].ChainSampling[0].StartOffset == 0 {
+				t.Fatal("root outside bound reset phase")
+			}
+		})
 	}
 }
