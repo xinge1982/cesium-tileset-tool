@@ -3,6 +3,7 @@ package road
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/qmuntal/gltf"
 	"github.com/qmuntal/gltf/modeler"
@@ -482,6 +483,9 @@ func appendPrimitivesAsMesh(doc *gltf.Document, primitives []*gltf.Primitive) {
 }
 
 func CompactDocument(doc *gltf.Document) error {
+	if err := ValidateStructuralMetadataBufferViews(doc); err != nil {
+		return err
+	}
 	if doc == nil || len(doc.Buffers) == 0 || doc.Buffers[0] == nil {
 		return nil
 	}
@@ -542,12 +546,14 @@ func CompactDocument(doc *gltf.Document) error {
 	remapMeshAccessors(doc, accessorMap)
 	remapNodeInstancingAccessors(doc, accessorMap)
 	remapImageBufferViews(doc, bufferViewMap)
-	remapStructuralMetadataBufferViews(doc, bufferViewMap)
+	if err := remapStructuralMetadataBufferViews(doc, bufferViewMap); err != nil {
+		return err
+	}
 
 	doc.Accessors = newAccessors
 	doc.BufferViews = newBufferViews
 	doc.Buffers = []*gltf.Buffer{{ByteLength: len(newBufferData), Data: newBufferData}}
-	return nil
+	return ValidateStructuralMetadataBufferViews(doc)
 }
 
 func collectReferencedMeshes(doc *gltf.Document) []int {
@@ -652,30 +658,11 @@ func collectReferencedBufferViews(doc *gltf.Document, accessorRefs []int) []int 
 			add(*img.BufferView)
 		}
 	}
-	if doc.Extensions != nil {
-		if ext, ok := doc.Extensions["EXT_structural_metadata"].(map[string]any); ok {
-			if tables, ok := ext["propertyTables"].([]map[string]any); ok {
-				for _, tbl := range tables {
-					props, _ := tbl["properties"].(map[string]any)
-					for _, raw := range props {
-						prop, _ := raw.(map[string]any)
-						switch v := prop["values"].(type) {
-						case int:
-							add(v)
-						case float64:
-							add(int(v))
-						}
-						switch v := prop["stringOffsets"].(type) {
-						case int:
-							add(v)
-						case float64:
-							add(int(v))
-						}
-					}
-				}
-			}
-		}
+	refs, _ := structuralMetadataBufferViewRefs(doc) // Validated before compaction.
+	for _, ref := range refs {
+		add(ref.index)
 	}
+
 	return order
 }
 
@@ -741,42 +728,130 @@ func remapImageBufferViews(doc *gltf.Document, bufferViewMap map[int]int) {
 	}
 }
 
-func remapStructuralMetadataBufferViews(doc *gltf.Document, bufferViewMap map[int]int) {
-	if doc.Extensions == nil {
-		return
+func remapStructuralMetadataBufferViews(doc *gltf.Document, bufferViewMap map[int]int) error {
+	refs, err := structuralMetadataBufferViewRefs(doc)
+	if err != nil {
+		return err
 	}
-	ext, ok := doc.Extensions["EXT_structural_metadata"].(map[string]any)
+	for _, ref := range refs {
+		index, ok := bufferViewMap[ref.index]
+		if !ok {
+			return fmt.Errorf("structural metadata %s: bufferView %d was not retained", ref.key, ref.index)
+		}
+		ref.property[ref.key] = index
+	}
+	return nil
+}
+
+type metadataBufferViewRef struct {
+	property map[string]any
+	key      string
+	index    int
+}
+
+// Read property-table references in both builder and JSON-decoded representations.
+// The returned property maps belong to the document and are updated during remapping.
+func structuralMetadataBufferViewRefs(doc *gltf.Document) ([]metadataBufferViewRef, error) {
+	if doc == nil || doc.Extensions == nil {
+		return nil, nil
+	}
+	raw, exists := doc.Extensions["EXT_structural_metadata"]
+	if !exists {
+		return nil, nil
+	}
+	ext, ok := raw.(map[string]any)
 	if !ok {
-		return
+		data, err := json.Marshal(raw)
+		if err != nil {
+			return nil, fmt.Errorf("encode structural metadata: %w", err)
+		}
+		if err = json.Unmarshal(data, &ext); err != nil || ext == nil {
+			return nil, fmt.Errorf("invalid structural metadata object")
+		}
+		doc.Extensions["EXT_structural_metadata"] = ext
 	}
-	tables, ok := ext["propertyTables"].([]map[string]any)
-	if !ok {
-		return
+	rawTables, exists := ext["propertyTables"]
+	if !exists {
+		return nil, nil
 	}
-	for _, tbl := range tables {
-		props, _ := tbl["properties"].(map[string]any)
-		for _, raw := range props {
-			prop, _ := raw.(map[string]any)
-			if v, ok := prop["values"].(int); ok {
-				if newIdx, ok := bufferViewMap[v]; ok {
-					prop["values"] = newIdx
-				}
-			} else if v, ok := prop["values"].(float64); ok {
-				if newIdx, ok := bufferViewMap[int(v)]; ok {
-					prop["values"] = newIdx
-				}
+	var tables []map[string]any
+	switch values := rawTables.(type) {
+	case []map[string]any:
+		tables = values
+	case []any:
+		for i, v := range values {
+			table, ok := v.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("invalid property table %d", i)
 			}
-			if v, ok := prop["stringOffsets"].(int); ok {
-				if newIdx, ok := bufferViewMap[v]; ok {
-					prop["stringOffsets"] = newIdx
+			tables = append(tables, table)
+		}
+	default:
+		return nil, fmt.Errorf("invalid structural metadata propertyTables array")
+	}
+	refs := []metadataBufferViewRef{}
+	for ti, table := range tables {
+		rawProps, exists := table["properties"]
+		if !exists {
+			continue
+		}
+		props, ok := rawProps.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid properties in table %d", ti)
+		}
+		for name, rawProp := range props {
+			prop, ok := rawProp.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("invalid metadata property %s", name)
+			}
+			for _, key := range []string{"values", "stringOffsets", "arrayOffsets"} {
+				value, exists := prop[key]
+				if !exists {
+					continue
 				}
-			} else if v, ok := prop["stringOffsets"].(float64); ok {
-				if newIdx, ok := bufferViewMap[int(v)]; ok {
-					prop["stringOffsets"] = newIdx
+				index := -1
+				switch v := value.(type) {
+				case int:
+					index = v
+				case float64:
+					if !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v < float64(int(^uint(0)>>1)) && v == math.Trunc(v) {
+						index = int(v)
+					}
+				case json.Number:
+					if n, e := v.Int64(); e == nil && n >= 0 && uint64(n) < uint64(^uint(0)>>1) {
+						index = int(n)
+					}
 				}
+				if index < 0 {
+					return nil, fmt.Errorf("invalid metadata bufferView index in table %d property %s.%s: %v", ti, name, key, value)
+				}
+				refs = append(refs, metadataBufferViewRef{prop, key, index})
 			}
 		}
 	}
+	return refs, nil
+}
+
+// Reject dangling property-table references and unreadable backing data.
+func ValidateStructuralMetadataBufferViews(doc *gltf.Document) error {
+	refs, err := structuralMetadataBufferViewRefs(doc)
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		if ref.index >= len(doc.BufferViews) || doc.BufferViews[ref.index] == nil {
+			return fmt.Errorf("structural metadata %s references missing bufferView %d (count %d)", ref.key, ref.index, len(doc.BufferViews))
+		}
+		view := doc.BufferViews[ref.index]
+		if view.Buffer < 0 || view.Buffer >= len(doc.Buffers) || doc.Buffers[view.Buffer] == nil {
+			return fmt.Errorf("metadata bufferView %d references missing buffer", ref.index)
+		}
+		buffer := doc.Buffers[view.Buffer]
+		if view.ByteOffset < 0 || view.ByteLength < 0 || view.ByteOffset > len(buffer.Data) || view.ByteLength > len(buffer.Data)-view.ByteOffset {
+			return fmt.Errorf("metadata bufferView %d data is out of bounds", ref.index)
+		}
+	}
+	return nil
 }
 
 func cloneAccessor(src *gltf.Accessor) (*gltf.Accessor, error) {

@@ -103,6 +103,9 @@ func TestBarrierWaveGeohashSlices(t *testing.T) {
 		if doc.Extensions["EXT_structural_metadata"] == nil {
 			t.Fatal("missing property table")
 		}
+		if err := ValidateStructuralMetadataBufferViews(doc); err != nil {
+			t.Fatal(err)
+		}
 		for _, mesh := range doc.Meshes {
 			for _, primitive := range mesh.Primitives {
 				for _, index := range primitive.Attributes {
