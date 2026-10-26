@@ -90,7 +90,11 @@ func PrepareSidewallChains(features []LineFeature, coordinates *CoordinatePipeli
 			class = f.Fields["type"]
 		}
 		// Separate missing classes from explicit values; retain construction dimensions.
-		base, panel := guardrailRailHeights(f.Fields, defaultGuardrailRailHeight, defaultGuardrailRailHeightAll)
+		defaultBase, defaultPanel := defaultGuardrailRailHeight, defaultGuardrailRailHeightAll
+		if kind == "wave_three" {
+			defaultBase, defaultPanel = defaultGuardrailThreeWaveRailHeight, defaultGuardrailThreeWaveRailHeightAll
+		}
+		base, panel := guardrailRailHeights(f.Fields, defaultBase, defaultPanel)
 		direction := int64FromFields(f.Fields, "direction")
 		group := fmt.Sprintf("%s|%v|%d|%g|%g", kind, class, direction, base, panel)
 		identity := f.Fields["id"]

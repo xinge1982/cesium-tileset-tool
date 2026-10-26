@@ -15,10 +15,10 @@ import (
 
 const (
 	defaultGuardrailPostSpacing            = float32(4.0)
-	defaultGuardrailRailHeight             = float32(0.62)
+	defaultGuardrailRailHeight             = float32(0.445)
 	defaultGuardrailRailHeightAll          = float32(0.31)
-	defaultGuardrailThreeWaveRailHeight    = float32(0.83)
-	defaultGuardrailThreeWaveRailHeightAll = float32(0.41)
+	defaultGuardrailThreeWaveRailHeight    = float32(0.444)
+	defaultGuardrailThreeWaveRailHeightAll = float32(0.506)
 	defaultGuardrailWaveDepth              = float32(0.085)
 	defaultGuardrailRailLengthUV           = float32(1.0)
 	defaultGuardrailNoseEndTileMeters      = float32(0.2)
@@ -55,7 +55,7 @@ type instancedTransform struct {
 // 函数内部会：
 // 1. 删除连续重复点。
 // 2. 根据方向计算护栏偏移方向。
-// 3. 创建护栏平面几何。
+// 3. 沿线路扫掠余弦波形截面，生成无厚度的凹凸网格。
 //
 // 参数：
 // line        护栏中心线。
@@ -66,20 +66,7 @@ type instancedTransform struct {
 // 返回：
 // 顶点、法线、UV、索引以及可能的错误。
 func buildGuardrailTwoWaveMesh(line LocalLine, direction int, railHeight, railHeightAll float32) ([][3]float32, [][3]float32, [][2]float32, []uint32, error) {
-	points := dedupeLinePoints(line.Points)
-	if len(points) < 2 {
-		return nil, nil, nil, nil, fmt.Errorf("guardrail line requires at least 2 distinct points")
-	}
-
-	sign := float32(-1)
-	if direction == 1 {
-		sign = 1
-	}
-
-	return buildGuardrailRailPlane(points, sign, railHeight, railHeightAll),
-		buildGuardrailRailPlaneNormals(points, sign),
-		buildGuardrailRailPlaneUV(points),
-		buildGuardrailRailPlaneIndices(points), nil
+	return buildGuardrailWaveSweep(line, direction, 2, railHeight, railHeightAll)
 }
 
 // 创建三波护栏网格模型。
@@ -87,20 +74,7 @@ func buildGuardrailTwoWaveMesh(line LocalLine, direction int, railHeight, railHe
 // 功能与两波护栏生成方式一致，区别在于调用方传入不同的高度参数。
 // 用于生成符合三波护栏尺寸规格的几何数据。
 func buildGuardrailThreeWaveMesh(line LocalLine, direction int, railHeight, railHeightAll float32) ([][3]float32, [][3]float32, [][2]float32, []uint32, error) {
-	points := dedupeLinePoints(line.Points)
-	if len(points) < 2 {
-		return nil, nil, nil, nil, fmt.Errorf("guardrail line requires at least 2 distinct points")
-	}
-
-	sign := float32(-1)
-	if direction == 1 {
-		sign = 1
-	}
-
-	return buildGuardrailRailPlane(points, sign, railHeight, railHeightAll),
-		buildGuardrailRailPlaneNormals(points, sign),
-		buildGuardrailRailPlaneUV(points),
-		buildGuardrailRailPlaneIndices(points), nil
+	return buildGuardrailWaveSweep(line, direction, 3, railHeight, railHeightAll)
 }
 
 // 创建双面护栏平面模型。

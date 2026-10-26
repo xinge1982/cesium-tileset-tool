@@ -8,12 +8,43 @@ so setting a tile region alone does not cut the guardrail.
 
 | feature_type | Geometry | Default board placement above input Z | UV | Supports |
 | --- | --- | --- | --- | --- |
-| empty / `wave_two` | Continuous vertical strip with texture | bottom 0.62 m, height 0.31 m | U repeats every 1 m; V spans the texture | GPU instances |
-| `wave_three` | Continuous vertical strip with texture | bottom 0.83 m, height 0.41 m | U repeats every 1 m; V spans the texture | GPU instances |
-| `wave_nose_end` | Single-sided three-wave strip geometry, double-sided material | bottom 0.83 m, height 0.41 m | 0.2 m repeat with UV rotation (default 45 degrees) | None |
+| empty / `wave_two` | Cosine two-wave swept sheet | bottom 0.445 m, height 0.310 m | U repeats every 1 m; V spans the texture | GPU instances |
+| `wave_three` | Cosine three-wave swept sheet | bottom 0.444 m, height 0.506 m | U repeats every 1 m; V spans the texture | GPU instances |
+| `wave_nose_end` | Single-sided three-wave strip geometry, double-sided material | bottom 0.444 m, height 0.506 m | 0.2 m repeat with UV rotation (default 45 degrees) | None |
 
-Wave appearance comes from the textures; these active paths do not sweep a
-physical corrugated steel profile. Two/three-wave board heights accept the
+Two-/three-wave boards now use an approximate corrugated cross-section swept
+along every source line vertex. The nose end remains a separate planar textured
+strip; it does not yet use a physically modeled round terminal. Its shared
+three-wave default dimensions now follow the updated three-wave dimensions.
+
+For the visual sweep, normalized height `t` is sampled using 16 segments per wave:
+
+```text
+height(t) = baseHeight + panelHeight * t
+depth(t)  = 0.085 / 2 * (1 - cos(2 * pi * waveCount * t))
+```
+
+This produces 33 cross-section vertices for two waves and 49 for three waves.
+The nominal straight-section depth envelope is 85 mm, not +/-85 mm. Direction
+mirrors the transverse offsets and changes triangle winding. Shared sections use
+capped miter offsets on bends (up to 2.5x nominal offset); closed seams share
+positions and averaged normals. Near reversals are rejected instead of emitting
+folded sheets. Input polyline density still controls longitudinal smoothness.
+
+Input Z is ground datum. The 310/506 mm board heights and 85 mm depth use the
+uploaded JTG/T D81-2017 table 6.2.7-1; center heights are 600/697 mm. Thus default
+bottom/top are 445/755 mm and 444/950 mm. No extra curb height is added. This is a
+cosine visualization approximation, NOT an exact standard manufacturing profile:
+rolled edges, thickness, bolts, overlap and validated bend radii are omitted.
+Posts/connectors retain their existing simplified geometry and 4 m sampling;
+they have not been redesigned to match every standard protection level.
+
+The bundled test uses a uniform silver material for two-/three-wave boards to
+show the geometric relief without baked wave shading from the old textures.
+Production callers can still supply their own material. A textured material is
+not required for the corrugation to be visible.
+
+Two/three-wave board heights accept the
 existing `rail_height`/`board_base_height`/`board_bottom_height` and
 `rail_height_all`/`board_height`/`rail_panel_height` aliases. The active nose-end
 path uses the default three-wave dimensions. The `direction` field is mapped
@@ -197,3 +228,14 @@ short parts, height/type/direction separation, missing Z, branches, planar
 crossings, cycle determinism and seam ownership. The integration fixture decodes
 output GLBs and compares every GPU instance translation, rotation and scale with
 its prepared source, both for full output and a bound excluding the chain root.
+
+Sweep envelope and bend checks:
+
+```powershell
+go test ./map3d/road/common -run '^TestGuardrailCosineSweep' -count=1 -v
+```
+
+These verify wave count, ground-relative elevations, total depth, winding,
+unit normals, UV distance, graded/bent lines and closed-ring seams. The existing
+Geohash test checks true swept surface area and support counts across slicing,
+and validates decoded metadata references after compaction.

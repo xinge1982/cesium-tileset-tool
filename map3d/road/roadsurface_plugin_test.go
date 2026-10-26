@@ -1709,7 +1709,7 @@ func buildGuardrailTwoWaveFeaturesForTest(fc *geojson.FeatureCollection, texture
 				Features:  featureRowsFromGeoJSON(fc.Features[i].Properties, "barrier_wave_two"),
 			},
 			Material: MaterialSet{
-				Top:  MaterialRef{Name: "guardrail-three-wave-rail", Path: texturePath, Mode: MaterialModeTexture, DoubleSided: true},
+				Top:  MaterialRef{Name: "guardrail-three-wave-rail", Color: "#B8BDC5", Mode: MaterialModeColor, DoubleSided: true},
 				Side: MaterialRef{Name: "guardrail-two-wave-support", Color: "#8D949C", Mode: MaterialModeColor, DoubleSided: true},
 			},
 			UV: UVOptions{Mapping: UVMappingSweep, RepeatX: 1, RepeatY: 1, FlipV: false},
@@ -1734,7 +1734,7 @@ func buildGuardrailThreeWaveFeaturesForTest(fc *geojson.FeatureCollection, textu
 				Features:  featureRowsFromGeoJSON(fc.Features[i].Properties, "barrier_wave_three"),
 			},
 			Material: MaterialSet{
-				Top:  MaterialRef{Name: "guardrail-three-wave-rail", Path: texturePath, Mode: MaterialModeTexture, DoubleSided: true},
+				Top:  MaterialRef{Name: "guardrail-three-wave-rail", Color: "#B8BDC5", Mode: MaterialModeColor, DoubleSided: true},
 				Side: MaterialRef{Name: "guardrail-three-wave-support", Color: "#8D949C", Mode: MaterialModeColor, DoubleSided: true},
 			},
 			UV: UVOptions{Mapping: UVMappingSweep, RepeatX: 1, RepeatY: 1, FlipV: false},
