@@ -16,7 +16,7 @@ import (
 	"github.com/twpayne/go-geom/encoding/geojson"
 )
 
-// TestBarrierWaveGeohashSlices reads only two-wave, three-wave and nose-end
+// Read only two-wave, three-wave and nose-end
 // GeoJSONs. All input features must fit MAP3D_TEST_BOUND when it is set.
 func TestBarrierWaveGeohashSlices(t *testing.T) {
 	precision := 6

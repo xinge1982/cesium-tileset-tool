@@ -10,7 +10,7 @@ import (
 	"github.com/twpayne/go-geom"
 )
 
-// SidewallChainOptions uses metres in the shared source frame. Only logical
+// Endpoint matching uses metres in the shared source frame. Only logical
 // end-to-start endpoints join, never planar interior intersections. Ambiguous
 // branches terminate all incident chains rather than selecting an arbitrary arm.
 type SidewallChainOptions struct {
@@ -19,7 +19,7 @@ type SidewallChainOptions struct {
 	MaxTurnDegrees float64
 }
 
-// LineChainSampling is per original LineString part, not per tile. Length and
+// Sampling applies to each original LineString part, not each tile. Length and
 // StartOffset use the same horizontal XZ metric as the guardrail sampler.
 // Reverse affects stationing only: source geometry, normals and support sides
 // retain their original orientation. IncludeEnd is false for chain interiors
@@ -47,7 +47,7 @@ type sidewallEndpointCell struct {
 	x, z  int64
 }
 
-// PrepareSidewallChains returns shallow feature copies with independent sampling
+// Return shallow feature copies with independent sampling
 // slices. It never modifies geometry, Fields, Features or database startoffset.
 // Supply ALL source features before filtering a bound. Currently two-/three-wave
 // barriers participate; other sidewall plugins can reuse the sampling contract.

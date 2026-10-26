@@ -16,7 +16,7 @@ import (
 	"github.com/qmuntal/gltf/modeler"
 )
 
-// BarrierWaveGeohashOptions describes fixed-precision, shared-frame slicing.
+// Fixed-precision, shared-frame slicing options.
 // Features must have WGS84 LineString/MultiLineString geometry. OutputDir is the
 // final tileset directory. Source supports are sampled once, then assigned to
 // exactly one projected cell by anchor; their intact geometry may cross an edge.
@@ -44,7 +44,7 @@ type waveSliceCell struct {
 	boundary [][2]float64
 }
 
-// BuildBarrierWaveGeohashSlices preserves source rail UVs, normals, feature IDs
+// Preserve source rail UVs, normals, feature IDs
 // and GPU support instance transforms rather than rebuilding cut line fragments.
 func BuildBarrierWaveGeohashSlices(features []LineFeature, opt BarrierWaveGeohashOptions) (*BarrierWaveGeohashResult, error) {
 	if opt.Precision == 0 {
