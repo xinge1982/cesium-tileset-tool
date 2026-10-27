@@ -21,7 +21,7 @@ For the visual sweep, normalized height `t` is sampled using 16 segments per wav
 
 ```text
 height(t) = baseHeight + panelHeight * t
-depth(t)  = 0.085 / 2 * (1 - cos(2 * pi * waveCount * t))
+depth(t)  = 0.085 / 2 * (1 - cos(2 * pi * waveCount * t + pi))
 ```
 
 This produces 33 cross-section vertices for two waves and 49 for three waves.
@@ -36,8 +36,10 @@ uploaded JTG/T D81-2017 table 6.2.7-1; center heights are 600/697 mm. Thus defau
 bottom/top are 445/755 mm and 444/950 mm. No extra curb height is added. This is a
 cosine visualization approximation, NOT an exact standard manufacturing profile:
 rolled edges, thickness, bolts, overlap and validated bend radii are omitted.
-Posts/connectors retain their existing simplified geometry and 4 m sampling;
-they have not been redesigned to match every standard protection level.
+Posts retain their existing simplified geometry, lateral placement and 4 m sampling;
+connector blocks are temporarily omitted. Upper/lower sheet edges are on the
+post-facing side after a half-period phase shift; nominal depth stays 85 mm.
+The posts have not been redesigned to match every standard protection level.
 
 The bundled test uses a uniform silver material for two-/three-wave boards to
 show the geometric relief without baked wave shading from the old textures.
@@ -50,7 +52,7 @@ existing `rail_height`/`board_base_height`/`board_bottom_height` and
 path uses the default three-wave dimensions. The `direction` field is mapped
 by `guardrailDirection` (1 becomes internal 2; 2 becomes internal 1).
 
-Supports use a combined post/connector template at 4 m horizontal intervals.
+Supports use a post-only template (connector blocks are temporarily omitted) at 4 m horizontal intervals.
 `BuildBarrierWaveGeohashSlices` now prepares connected source chains before
 building any geometry. It computes its own offsets; existing SQL `startoffset`
 values and business properties remain untouched. Direct plugin calls without

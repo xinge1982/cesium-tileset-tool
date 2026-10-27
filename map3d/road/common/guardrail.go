@@ -312,9 +312,9 @@ func guardrailSupportTransforms(line LocalLine) ([]instancedTransform, error) {
 	return out, nil
 }
 
-// 创建护栏支撑结构组合网格。
+// 创建仅包含立柱的护栏支撑网格。
 //
-// 将护栏立柱和连接件组合成一个局部模型。
+// 暂不生成波形板与立柱之间的连接块，立柱尺寸和横向位置保持不变。
 // 与实例化方式不同，该函数直接生成完整几何数据。
 //
 // 参数：
@@ -329,11 +329,10 @@ func buildGuardrailSupportMesh(direction int, railHeight, railHeightAll float32)
 	if direction == 1 {
 		sign = 1
 	}
-	// Combined support mesh is rotated as one instanced object; local X needs
+	// The post mesh is rotated as one instanced object; local X needs
 	// to match the previous world-space right-offset direction.
 	sign = -sign
 	postOffset := sign * (defaultGuardrailRailClearance + defaultGuardrailSpacerDepth + defaultGuardrailPostWidth/2)
-	spacerOffset := sign * (defaultGuardrailRailClearance + defaultGuardrailSpacerDepth/2)
 
 	var pos [][3]float32
 	var normals [][3]float32
@@ -343,9 +342,6 @@ func buildGuardrailSupportMesh(direction int, railHeight, railHeightAll float32)
 	appendCylinderGeometry(&pos, &normals, &uv, &indices,
 		[3]float32{postOffset, defaultGuardrailPostHeight / 2, 0},
 		defaultGuardrailPostWidth, defaultGuardrailPostHeight, defaultGuardrailPostDepth, 12)
-	appendBoxGeometry(&pos, &normals, &uv, &indices,
-		[3]float32{spacerOffset, railHeight + railHeightAll/2, 0},
-		defaultGuardrailSpacerDepth, defaultGuardrailSpacerHeight, defaultGuardrailSpacerWidth)
 	return pos, normals, uv, indices
 }
 

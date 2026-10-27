@@ -23,18 +23,18 @@ func TestGuardrailCosineSweepDimensions(t *testing.T) {
 			}
 			minimum, maximum := float32(100), float32(-100)
 			depth := float32(0)
-			peaks := 0
+			troughs := 0
 			for j := 0; j < stride; j++ {
 				p := pos[j]
 				minimum = min(minimum, p[1])
 				maximum = max(maximum, p[1])
 				depth = max(depth, float32(math.Abs(float64(p[2]))))
-				if j > 0 && j < stride-1 && math.Abs(float64(p[2])) > math.Abs(float64(pos[j-1][2])) && math.Abs(float64(p[2])) > math.Abs(float64(pos[j+1][2])) {
-					peaks++
+				if j > 0 && j < stride-1 && math.Abs(float64(p[2])) < math.Abs(float64(pos[j-1][2])) && math.Abs(float64(p[2])) < math.Abs(float64(pos[j+1][2])) {
+					troughs++
 				}
 			}
-			if math.Abs(float64(minimum-5-spec.base)) > 1e-6 || math.Abs(float64(maximum-5-spec.base-spec.height)) > 1e-6 || math.Abs(float64(depth-.085)) > 1e-6 || peaks != spec.waves {
-				t.Fatalf("incorrect envelope: min=%g max=%g depth=%g peaks=%d", minimum, maximum, depth, peaks)
+			if math.Abs(float64(minimum-5-spec.base)) > 1e-6 || math.Abs(float64(maximum-5-spec.base-spec.height)) > 1e-6 || math.Abs(float64(depth-.085)) > 1e-6 || troughs != spec.waves {
+				t.Fatalf("incorrect envelope: min=%g max=%g depth=%g troughs=%d", minimum, maximum, depth, troughs)
 			}
 			for i, n := range normals {
 				length := math.Sqrt(float64(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]))
@@ -94,6 +94,70 @@ func TestGuardrailCosineSweepBendAndGrade(t *testing.T) {
 	for j := 0; j < stride; j++ {
 		if pos[j] != pos[len(pos)-stride+j] || normals[j] != normals[len(normals)-stride+j] {
 			t.Fatal("closed sweep seam")
+		}
+	}
+}
+
+// Verify the phase against the actual post template after its instance rotation.
+func TestGuardrailSweepPhaseFacesPosts(t *testing.T) {
+	for _, direction := range []int{1, 2} {
+		for _, waves := range []int{2, 3} {
+			for _, points := range [][][3]float32{{{0, 0, 0}, {10, 0, 0}}, {{0, 0, 0}, {0, 0, 10}}, {{10, 0, 10}, {0, 0, 0}}} {
+				line := LocalLine{Points: points}
+				pos, _, _, _, err := buildGuardrailWaveSweep(line, direction, waves, .445, .31)
+				if err != nil {
+					t.Fatal(err)
+				}
+				post, _, _, _ := buildGuardrailSupportMesh(direction, .445, .31)
+				supports, err := guardrailSupportTransforms(line)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The symmetric cylinder's local center transforms with the source heading.
+				cx := float32(0)
+				for _, p := range post {
+					cx += p[0]
+				}
+				cx /= float32(len(post))
+				q := supports[0].Rotation
+				postOffset := [3]float32{(1 - 2*q[1]*q[1]) * cx, 0, -2 * q[1] * q[3] * cx}
+				edge := sub3(pos[0], points[0])
+				valley := sub3(pos[8], points[0])
+				if edge[0]*postOffset[0]+edge[2]*postOffset[2] <= 0 {
+					t.Fatal("edge is not on the post side")
+				}
+				if math.Abs(float64(edge[0]*edge[0]+edge[2]*edge[2]-.085*.085)) > 1e-6 {
+					t.Fatal("phase changed depth envelope")
+				}
+				if math.Hypot(float64(valley[0]), float64(valley[2])) > 1e-6 {
+					t.Fatal("half-wave valley did not move to source plane")
+				}
+			}
+		}
+	}
+}
+
+// Check that the active instance template contains no connector block vertices.
+func TestGuardrailSupportMeshPostOnly(t *testing.T) {
+	for _, direction := range []int{1, 2} {
+		got, gn, gu, gi := buildGuardrailSupportMesh(direction, .445, .31)
+		var want [][3]float32
+		var wn [][3]float32
+		var wu [][2]float32
+		var wi []uint32
+		sign := float32(1)
+		if direction == 1 {
+			sign = -1
+		}
+		offset := sign * (defaultGuardrailRailClearance + defaultGuardrailSpacerDepth + defaultGuardrailPostWidth/2)
+		appendCylinderGeometry(&want, &wn, &wu, &wi, [3]float32{offset, defaultGuardrailPostHeight / 2, 0}, defaultGuardrailPostWidth, defaultGuardrailPostHeight, defaultGuardrailPostDepth, 12)
+		if len(got) != len(want) || len(gi) != len(wi) || len(gn) != len(wn) || len(gu) != len(wu) {
+			t.Fatal("support contains geometry beyond the post")
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Fatal("post location or dimensions changed")
+			}
 		}
 	}
 }

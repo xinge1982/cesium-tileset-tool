@@ -56,7 +56,8 @@ func buildGuardrailWaveSweep(line LocalLine, direction, waves int, base, height 
 		}
 		for j := 0; j <= segments; j++ {
 			t := float64(j) / float64(segments)
-			depth := float32(float64(defaultGuardrailWaveDepth) * .5 * (1 - math.Cos(2*math.Pi*float64(waves)*t)))
+			// Shift by half a period: the upper/lower edges now face the post side.
+			depth := float32(float64(defaultGuardrailWaveDepth) * .5 * (1 - math.Cos(2*math.Pi*float64(waves)*t+math.Pi)))
 			positions = append(positions, [3]float32{p[0] + sign*float32(nx*miter)*depth, p[1] + base + height*float32(t), p[2] + sign*float32(nz*miter)*depth})
 			uv = append(uv, [2]float32{cumulative[i] / defaultGuardrailRailLengthUV, 1 - float32(t)})
 		}
