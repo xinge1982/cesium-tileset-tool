@@ -2569,7 +2569,7 @@ func QueryRenderTollBuildingsByGeohashBBox(configName string, db *gorm.DB, geoha
 
 		if modelDem != nil {
 			var scale = device.Height / modelDem.Height
-			device.Transform = getDeviceTransform(0, 1.0, scale, 1.0)
+			device.Transform = getDeviceTransform(0, 1.0, 1.0, scale)
 		} else {
 			return nil, errors.New("model dem not found")
 		}

@@ -1,5 +1,5 @@
 Desc: sw_jiangsu_1031
-Bound: 120.9509,31.7113,121.0263,31.8967
+Bound: 119.0539,32.2316,119.1710,32.3691
 #Bound: 116.61,30.36,122.904,35.573
 
 DefaultView:
@@ -585,53 +585,53 @@ Tilesets:
             storage:
               type: geom
               column: geom
-
-      - id: light
-        name:  路灯
-
-        lod:
-          lod0ModelMode: skip
-          lod1ModelMode: skip
-          lod2ModelMode: copy-lod3
-
-        match:
-          operator: prefix
-          value: hdpole_ld
-
-        keyMapping:
-          operator: removePrefix
-          value: hdpole_ld.
-
-        table:
-          schema: public
-          name: hdpole_ld
-          primaryKey: id
-          geometryField: geom
-
-        fields:
-          - name: id
-            label: 编号
-            list: true
-            search: true
-            editable: false
-            submit: true
-
-          - name: model
-            label: 模型
-            list: true
-            search: true
-            editable: false
-            submit: false
-
-          - name: geom
-            label: 位置
-            detail: true
-            list: false
-            search: false
-            editable: false
-            storage:
-              type: geom
-              column: geom
+#
+#      - id: light
+#        name:  路灯
+#
+#        lod:
+#          lod0ModelMode: skip
+#          lod1ModelMode: skip
+#          lod2ModelMode: copy-lod3
+#
+#        match:
+#          operator: prefix
+#          value: hdpole_ld
+#
+#        keyMapping:
+#          operator: removePrefix
+#          value: hdpole_ld.
+#
+#        table:
+#          schema: public
+#          name: hdpole_ld
+#          primaryKey: id
+#          geometryField: geom
+#
+#        fields:
+#          - name: id
+#            label: 编号
+#            list: true
+#            search: true
+#            editable: false
+#            submit: true
+#
+#          - name: model
+#            label: 模型
+#            list: true
+#            search: true
+#            editable: false
+#            submit: false
+#
+#          - name: geom
+#            label: 位置
+#            detail: true
+#            list: false
+#            search: false
+#            editable: false
+#            storage:
+#              type: geom
+#              column: geom
 
   roadsurface:
     name: 道路面

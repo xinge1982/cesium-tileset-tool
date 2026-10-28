@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<!--Created By OSGBLab(http://www.osgblab.com)-->
+<html>
+	<head>
+		<meta charset = "utf-8">
+		<meta http-equiv = "X-UA-Compatible" content = "IE=edge">
+		<meta name = "viewport" content = "width=device-width, initial-scale = 1, maximum-scale = 1, minimum-scale = 1, user-scalable = no">
+		<title>OSGBLab Cesium Data Viewer</title>
+		<script src = "./Cesium/Cesium.js"></script>
+		<style>
+			@import url(./Cesium/Widgets/widgets.css);
+			html, body, #OSGBLab_Container{
+				width:100% ;
+				height:100% ;
+				margin:0;
+				padding:0;
+				overflow:hidden;
+			}
+		
+            #viewerControls {
+                position: absolute; top: 10px; left: 10px; z-index: 999;
+                display: flex; flex-direction: column; gap: 8px;
+                font: 14px/1.5 sans-serif;
+            }
+            #viewerControls button {
+                padding: 8px 12px; background: #333; color: white;
+                border: 1px solid #666; border-radius: 4px; cursor: pointer;
+                text-align: left;
+            }
+            #viewerControls button[aria-pressed="true"] { background: #1677ff; }
+            #viewerControls #modelButton { background: #1677ff; }
+            #cameraInfo {
+                position: absolute; left: 10px; bottom: 40px; z-index: 999;
+                max-width: calc(100% - 44px); padding: 12px;
+                background: rgba(25, 25, 25, 0.88); color: #fff;
+                border: 1px solid #666; border-radius: 4px;
+                font: 13px/1.8 monospace; white-space: pre-wrap;
+                #pointer-events: none;
+            }
+        </style>
+	</head>
+	<body>
+		<div id="OSGBLab_Container"></div>
+
+		<div id="modelDialog"
+			 style="
+     display:none;
+     position:absolute;
+     top:80px;
+     left:50%;
+     transform:translateX(-50%);
+     width:350px;
+     background:white;
+     padding:20px;
+     z-index:1000;
+     border-radius:8px;
+     box-shadow:0 0 15px #555;
+     ">
+
+			<h3>Load GLTF / GLB Model</h3>
+
+
+			<input
+					id="gltfFile"
+					type="file"
+					accept=".glb,.gltf"
+			/>
+
+
+			<div style="margin-top:15px;text-align:right">
+
+				<button id="cancelModel">
+					Cancel
+				</button>
+
+				<button id="loadModel"
+						style="margin-left:10px">
+					Yes
+				</button>
+
+			</div>
+
+		</div>
+
+
+        <div id="viewerControls" role="group" aria-label="查看选项">
+            <button id="wireframeButton" type="button" aria-pressed="false"
+                    title="显示 tileset 和 GLB 模型的三角形线框">三角网：关闭</button>
+            <button id="cameraButton" type="button" aria-pressed="false"
+                    aria-controls="cameraInfo">相机信息：关闭</button>
+            <button id="modelButton" type="button">Load GLB</button>
+        </div>
+        <div id="cameraInfo" hidden aria-label="相机当前位置和角度"></div>
+	</body>
+	<script>
+		let currentTileset = null;
+		let wireframeEnabled = false;
+        let cameraInfoEnabled = false;
+		let currentModel = null;
+		let selectedModelFile = null
+
+		function IsMobile() {
+			var ios = /AppleWebKit/.test(navigator.userAgent) && /Mobile\/\w+/.test(navigator.userAgent);
+			var mobile = ios || /Android|webOS|BlackBerry|Opera Mini|Opera Mobi|IEMobile/i.test(navigator.userAgent);
+			return mobile;
+		}
+
+        // Completely disable Cesium Ion usage
+        Cesium.Ion.defaultAccessToken = undefined;
+
+		const myProvider = new Cesium.UrlTemplateImageryProvider({
+			url: 'https://webst01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=6&x={x}&y={y}&z={z}',
+			maximumLevel: 16
+		});
+
+		var viewer = new Cesium.Viewer('OSGBLab_Container', {
+			baseLayer: new Cesium.ImageryLayer(myProvider),
+			baseLayerPicker: false,
+			animation: false,
+			vrButton: true,
+			timeline: false,
+			sceneModePicker: false,
+			scene3DOnly: true,
+			infoBox: true,
+			inspector: true,
+			terrainProvider: new Cesium.EllipsoidTerrainProvider()
+		});
+
+		// Cesium.CesiumTerrainProvider.fromUrl(
+		// 		"https://47.104.194.94:28199/share/yichang/terrain"
+		// ).then((terrain) => {
+		// 	viewer.terrainProvider = terrain;
+		// });
+
+        viewer.scene.globe.depthTestAgainstTerrain = false;
+		viewer.scene.requestRenderMode = true // 按需渲染 ，手动更新渲染 viewer.scene.requestRender
+
+		// 在 Viewer 初始化完成后执行
+		controller = viewer.scene.screenSpaceCameraController
+
+		// 默认旋转有 LEFT_DRAG + RIGHT_DRAG
+		// 我们改成 LEFT_DRAG + MIDDLE_DRAG
+		controller.rotateEventTypes = [Cesium.CameraEventType.LEFT_DRAG, Cesium.CameraEventType.MIDDLE_DRAG]
+
+		// 默认平移是 MIDDLE_DRAG
+		// 我们改成 RIGHT_DRAG
+		controller.lookEventTypes = [Cesium.CameraEventType.RIGHT_DRAG]
+
+		// 限制俯仰角
+		//controller.minimumPitch = Cesium.Math.toRadians(-89) // 最低俯视角
+		//controller.maximumPitch = Cesium.Math.toRadians(-10) // 最大俯视角（不能水平）
+		controller.minimumZoomDistance = 1
+		controller.enableCollisionDetection = true
+		//Limit zoom speed (not strict bounds)
+		controller.zoomFactor = 2.0;
+
+		// 创建 tileset
+		const url = '/api/tilesets/tileset.json';
+		const options = {
+            enableDebugWireframe: true,
+			debugShowBoundingVolume: true,
+			debugShowContentBoundingVolume: true,
+			debugShowViewerRequestVolume: false,
+			debugColorizeTiles: false, // random color per tile
+			debugShowGeometricError: false,
+			debugShowRenderingStatistics: false,
+			debugShowUrl: false,
+			cullWithChildrenBounds: false,
+			cullRequestsWhileMoving: false
+		};
+		Cesium.Cesium3DTileset.fromUrl(url, options).then((tileset) => {
+			currentTileset = tileset;
+
+			// roadsurface 中还包含多组 I3DM，龙门架跨度较大，使用更大的包围球。
+			applyModelBoundingVolumeWorkaround(tileset, {
+				scale: 10.0,
+				minimumRadius: 20.0,
+				disableBoundingVolume: false,
+			});
+
+			viewer.scene.primitives.add(tileset)
+
+			tileset.debugWireframe = wireframeEnabled;
+			tileset.style = new Cesium.Cesium3DTileStyle({
+				pointSize: '3.0'
+			})
+
+			tileset.maximumScreenSpaceError = 64 // improves density
+			tileset.pointCloudShading = new Cesium.PointCloudShading({
+				attenuation: true,
+				geometricErrorScale: 1.0,
+				maximumAttenuation: 3.0, // clamp far density
+				baseResolution: 0.5
+			})
+
+			tileset.dynamicScreenSpaceError = true
+			tileset.dynamicScreenSpaceErrorDensity = 0.00278 // increase to cull more
+			tileset.dynamicScreenSpaceErrorFactor = 4.0
+			tileset.dynamicScreenSpaceErrorHeightFalloff = 0.25
+
+			tileset.maximumMemoryUsage = 512 // MB (try even 256)
+			tileset.skipLevelOfDetail = true
+			tileset.baseScreenSpaceError = 1024
+			tileset.skipScreenSpaceErrorFactor = 16
+			tileset.skipLevels = 1
+
+			viewer.zoomTo(tileset);
+
+			// eslint-disable-next-line no-console
+			console.log('tileset 加载完成:', url)
+		})
+
+		// Cesium 1.117 会使用模型 DrawCommand 的包围球划分渲染视锥。
+		// 部分设施数据的包围球偏小，旋转相机时可能被分配到错误的视锥而消失。
+		// 此补丁只放大指定 tileset 的模型命令包围球，不修改官方 Cesium.js。
+		function applyModelBoundingVolumeWorkaround(tileset, options = {}) {
+			const scale = options.scale ?? 2.0;
+			const minimumRadius = options.minimumRadius ?? 50.0;
+			const disableBoundingVolume = options.disableBoundingVolume ?? false;
+			const originalUpdateForPass = tileset.updateForPass;
+			const originalRadiusMap = new WeakMap();
+
+			tileset.updateForPass = function (frameState, tilesetPassState) {
+				const commandList =
+						tilesetPassState.commandList || frameState.commandList;
+				const commandStart = commandList.length;
+
+				originalUpdateForPass.call(this, frameState, tilesetPassState);
+
+				for (let i = commandStart; i < commandList.length; i++) {
+					const command = commandList[i];
+					const model = command.owner;
+					const content = model && model.content;
+
+					// 只处理当前 tileset 中由 B3DM、I3DM 或 CMPT 产生的模型命令。
+					if (!content || content.tileset !== this) {
+						continue;
+					}
+
+					command.cull = false;
+
+					if (disableBoundingVolume) {
+						// 如果包围球中心本身也不正确，可启用此兜底模式。
+						command.boundingVolume = undefined;
+						continue;
+					}
+
+					const boundingVolume = command.boundingVolume;
+					if (!boundingVolume || typeof boundingVolume.radius !== "number") {
+						continue;
+					}
+
+					let originalRadius = originalRadiusMap.get(boundingVolume);
+					if (originalRadius === undefined) {
+						originalRadius = boundingVolume.radius;
+						originalRadiusMap.set(boundingVolume, originalRadius);
+					}
+
+					boundingVolume.radius = Math.max(
+							boundingVolume.radius,
+							originalRadius * scale,
+							minimumRadius,
+					);
+				}
+			};
+		}
+
+
+		async function addModelInFrontOfCamera(url)
+		{
+			if(currentModel)
+			{
+				viewer.scene.primitives.remove(
+						currentModel
+				);
+			}
+			const camera =
+					viewer.camera;
+
+			// camera position
+			const position =
+					camera.positionWC;
+
+			const direction =
+					camera.directionWC;
+
+			/*
+               Put model 20 meters ahead
+            */
+			const modelPosition =
+					Cesium.Cartesian3.add(
+							position,
+
+							Cesium.Cartesian3.multiplyByScalar(
+									direction,
+									5,
+									new Cesium.Cartesian3()
+							),
+
+							new Cesium.Cartesian3()
+					);
+			const hpr =
+					new Cesium.HeadingPitchRoll(
+							camera.heading,
+							0,
+							0
+					);
+			const modelMatrix =
+					Cesium.Transforms.headingPitchRollToFixedFrame(
+							modelPosition,
+							hpr
+					);
+			currentModel =
+					await Cesium.Model.fromGltfAsync({
+
+						url:url,
+
+						modelMatrix:modelMatrix,
+
+						scale:1.0,
+
+						minimumPixelSize:80,
+                        enableDebugWireframe: true,
+                        debugWireframe: wireframeEnabled
+
+					});
+			// Apply the latest switch state if it changed during loading.
+            currentModel.debugWireframe = wireframeEnabled;
+            viewer.scene.primitives.add(
+					currentModel
+			);
+			viewer.scene.requestRender();
+		}
+
+        const wireframeButton = document.getElementById("wireframeButton");
+        const cameraButton = document.getElementById("cameraButton");
+        const cameraInfo = document.getElementById("cameraInfo");
+
+        wireframeButton.onclick = function () {
+            wireframeEnabled = !wireframeEnabled;
+            if (currentTileset) currentTileset.debugWireframe = wireframeEnabled;
+            if (currentModel) currentModel.debugWireframe = wireframeEnabled;
+            this.textContent = wireframeEnabled ? "三角网：开启" : "三角网：关闭";
+            this.setAttribute("aria-pressed", String(wireframeEnabled));
+            viewer.scene.requestRender();
+        };
+
+        function updateCameraInfo() {
+            if (!cameraInfoEnabled) return;
+            const camera = viewer.camera;
+            const position = camera.positionCartographic;
+            const degrees = Cesium.Math.toDegrees;
+            const heading = ((degrees(camera.heading) % 360) + 360) % 360;
+            const text = [
+                "相机当前位置（WGS84）",
+                "经度：" + degrees(position.longitude).toFixed(7) + "°",
+                "纬度：" + degrees(position.latitude).toFixed(7) + "°",
+                "椭球高度：" + position.height.toFixed(2) + " m",
+                "方位角 Heading：" + heading.toFixed(2) + "°",
+                "俯仰角 Pitch：" + degrees(camera.pitch).toFixed(2) + "°",
+                "翻滚角 Roll：" + degrees(camera.roll).toFixed(2) + "°"
+            ].join("\n");
+            if (cameraInfo.textContent !== text) cameraInfo.textContent = text;
+        }
+
+        cameraButton.onclick = function () {
+            cameraInfoEnabled = !cameraInfoEnabled;
+            cameraInfo.hidden = !cameraInfoEnabled;
+            this.textContent = cameraInfoEnabled ? "相机信息：开启" : "相机信息：关闭";
+            this.setAttribute("aria-pressed", String(cameraInfoEnabled));
+            updateCameraInfo();
+            viewer.scene.requestRender();
+        };
+        // Updating after rendered frames also tracks flyTo/zoomTo in requestRenderMode.
+        viewer.scene.postRender.addEventListener(updateCameraInfo);
+
+		document
+				.getElementById("modelButton")
+				.onclick=function(){
+
+			document
+					.getElementById("modelDialog")
+					.style.display="block";
+
+		};
+
+		document
+				.getElementById("gltfFile")
+				.onchange=function(e){
+
+			selectedModelFile =
+					e.target.files[0];
+
+		};
+
+		document
+				.getElementById("cancelModel")
+				.onclick=function(){
+
+			document
+					.getElementById("modelDialog")
+					.style.display="none";
+
+		};
+
+		document
+				.getElementById("loadModel")
+				.onclick=async function(){
+
+
+			if(!selectedModelFile)
+			{
+				alert("Please select glb file");
+				return;
+			}
+
+
+			const url =
+					URL.createObjectURL(
+							selectedModelFile
+					);
+
+
+			await addModelInFrontOfCamera(url);
+
+
+
+			document
+					.getElementById("modelDialog")
+					.style.display="none";
+
+
+		};
+	</script>
+</html>
