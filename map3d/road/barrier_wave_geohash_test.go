@@ -13,6 +13,7 @@ import (
 
 	"cesium-tileset-tool/map3d/road/common"
 	"github.com/qmuntal/gltf"
+	"github.com/qmuntal/gltf/modeler"
 	"github.com/twpayne/go-geom/encoding/geojson"
 )
 
@@ -59,6 +60,32 @@ func TestBarrierWaveGeohashSlices(t *testing.T) {
 		out = t.TempDir()
 	}
 	opt := BarrierWaveGeohashOptions{OutputDir: filepath.Join(out, "barrier-wave-geohash"), Precision: precision}
+	for _, input := range []struct {
+		name   string
+		target *float32
+	}{
+		{"MAP3D_TEST_POST_DIAMETER", &opt.Posts.Diameter},
+		{"MAP3D_TEST_POST_TOP_OFFSET", &opt.Posts.TopAboveBoardCenter},
+		{"MAP3D_TEST_POST_HEIGHT", &opt.Posts.Height},
+		{"MAP3D_TEST_POST_SPACING", &opt.Posts.Spacing},
+		{"MAP3D_TEST_POST_LATERAL_OFFSET", &opt.Posts.LateralOffset},
+	} {
+		if value := os.Getenv(input.name); value != "" {
+			n, err := strconv.ParseFloat(value, 32)
+			if err != nil {
+				t.Fatal(err)
+			}
+			*input.target = float32(n)
+		}
+	}
+	if value := os.Getenv("MAP3D_TEST_POST_SEGMENTS"); value != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opt.Posts.RadialSegments = n
+	}
+
 	if value := os.Getenv("MAP3D_TEST_BOUND"); value != "" {
 		bound, err := ParseRoadSurfaceBound(value)
 		if err != nil {
@@ -283,6 +310,63 @@ func TestBarrierWaveChainSliceTransformsAndBound(t *testing.T) {
 			}
 			if bounded && prepared[1].ChainSampling[0].StartOffset == 0 {
 				t.Fatal("root outside bound reset phase")
+			}
+		})
+	}
+}
+
+// Verify global inputs and feature overrides survive construction and GLB slicing.
+func TestBarrierWavePostInputOptions(t *testing.T) {
+	for _, override := range []bool{false, true} {
+		t.Run(strconv.FormatBool(override), func(t *testing.T) {
+			f := LineFeature{FeatureInput: FeatureInput{BuildType: BuildTypeBarrierWave, Fields: FeatureFields{"id": 1, "bxdl": 5, "direction": 2, "feature_type": "wave_two"}, Geom: geom.NewLineString(geom.XYZ).MustSetCoords([]geom.Coord{{121, 31, 10}, {121.0002, 31, 10}})}}
+			opt := BarrierWaveGeohashOptions{OutputDir: t.TempDir(), Precision: 6, Posts: common.GuardrailPostOptions{Diameter: .16, Height: 1.25, Spacing: 2, LateralOffset: .3, RadialSegments: 16}}
+			height, diameter := float32(1.25), float32(.16)
+			if override {
+				f.GuardrailPosts = &common.GuardrailPostOptions{Diameter: .2, Height: 1.4, Spacing: 3, LateralOffset: .4, RadialSegments: 16}
+				height = 1.4
+				diameter = .2
+			}
+			result, err := BuildBarrierWaveGeohashSlices([]LineFeature{f}, opt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.SourceInstances == 0 || result.SourceInstances != result.SlicedInstances {
+				t.Fatal("lost posts")
+			}
+			for _, tile := range result.Tiles {
+				doc, err := gltf.Open(tile.GLBPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = waveNormalizeExtensions(doc); err != nil {
+					t.Fatal(err)
+				}
+				for _, node := range doc.Nodes {
+					_, _, _, _, instanced, err := readInstancedNodeAttributes(doc, node)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !instanced {
+						continue
+					}
+					for _, primitive := range doc.Meshes[*node.Mesh].Primitives {
+						pos, err := modeler.ReadPosition(doc, doc.Accessors[primitive.Attributes[gltf.POSITION]], nil)
+						if err != nil {
+							t.Fatal(err)
+						}
+						lo, hi := pos[0], pos[0]
+						for _, v := range pos {
+							for k := 0; k < 3; k++ {
+								lo[k] = min(lo[k], v[k])
+								hi[k] = max(hi[k], v[k])
+							}
+						}
+						if math.Abs(float64(hi[1]-height)) > 1e-6 || math.Abs(float64(lo[1])) > 1e-6 || math.Abs(float64(hi[0]-lo[0]-diameter)) > 1e-6 {
+							t.Fatal("post inputs not reflected in GLB", lo, hi)
+						}
+					}
+				}
 			}
 		})
 	}

@@ -754,6 +754,11 @@ func (b *SurfaceBuilder) BuildGuardrailTwoWave(feature LineFeature, lines []Loca
 
 	direction := guardrailDirection(feature.Fields)
 	railHeight, railHeightAll := guardrailRailHeights(feature.Fields, defaultGuardrailRailHeight, defaultGuardrailRailHeightAll)
+	posts, err := resolveGuardrailPosts(feature.GuardrailPosts, railHeight, railHeightAll)
+	if err != nil {
+		return nil, err
+	}
+
 	for lineIndex, line := range lines {
 		pos, normals, uv, indices, err := buildGuardrailTwoWaveMesh(line, direction, railHeight, railHeightAll)
 		if err != nil {
@@ -776,7 +781,7 @@ func (b *SurfaceBuilder) BuildGuardrailTwoWave(feature LineFeature, lines []Loca
 			}
 			sampling = &feature.ChainSampling[lineIndex]
 		}
-		supports, err := guardrailChainSupportTransforms(line, sampling)
+		supports, err := guardrailChainSupportTransforms(line, sampling, posts.Spacing)
 		if err != nil {
 			return nil, err
 		}
@@ -809,7 +814,7 @@ func (b *SurfaceBuilder) BuildGuardrailTwoWave(feature LineFeature, lines []Loca
 		instanceMaterial = materials.Top
 	}
 	if len(supportTransforms) > 0 {
-		supportPos, supportNormals, supportUV, supportIdx := buildGuardrailSupportMesh(direction, railHeight, railHeightAll)
+		supportPos, supportNormals, supportUV, supportIdx := buildGuardrailPostMesh(direction, posts)
 		supportPrimitive := buildPrimitiveFromGeometry(b.doc, instanceMaterial, supportPos, supportNormals, supportUV, supportIdx)
 		addInstancedPrimitiveNode(b.doc, len(b.doc.Meshes), supportPrimitive, "guardrail-supports", supportTransforms, featureID)
 	}
@@ -857,6 +862,11 @@ func (b *SurfaceBuilder) BuildGuardrailThreeWave(feature LineFeature, lines []Lo
 
 	direction := guardrailDirection(feature.Fields)
 	railHeight, railHeightAll := guardrailRailHeights(feature.Fields, defaultGuardrailThreeWaveRailHeight, defaultGuardrailThreeWaveRailHeightAll)
+	posts, err := resolveGuardrailPosts(feature.GuardrailPosts, railHeight, railHeightAll)
+	if err != nil {
+		return nil, err
+	}
+
 	for lineIndex, line := range lines {
 		pos, normals, uv, indices, err := buildGuardrailThreeWaveMesh(line, direction, railHeight, railHeightAll)
 		if err != nil {
@@ -879,7 +889,7 @@ func (b *SurfaceBuilder) BuildGuardrailThreeWave(feature LineFeature, lines []Lo
 			}
 			sampling = &feature.ChainSampling[lineIndex]
 		}
-		supports, err := guardrailChainSupportTransforms(line, sampling)
+		supports, err := guardrailChainSupportTransforms(line, sampling, posts.Spacing)
 		if err != nil {
 			return nil, err
 		}
@@ -912,7 +922,7 @@ func (b *SurfaceBuilder) BuildGuardrailThreeWave(feature LineFeature, lines []Lo
 		instanceMaterial = materials.Top
 	}
 	if len(supportTransforms) > 0 {
-		supportPos, supportNormals, supportUV, supportIdx := buildGuardrailSupportMesh(direction, railHeight, railHeightAll)
+		supportPos, supportNormals, supportUV, supportIdx := buildGuardrailPostMesh(direction, posts)
 		supportPrimitive := buildPrimitiveFromGeometry(b.doc, instanceMaterial, supportPos, supportNormals, supportUV, supportIdx)
 		addInstancedPrimitiveNode(b.doc, len(b.doc.Meshes), supportPrimitive, "guardrail-three-wave-supports", supportTransforms, featureID)
 	}

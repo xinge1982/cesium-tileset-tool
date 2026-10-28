@@ -36,7 +36,7 @@ uploaded JTG/T D81-2017 table 6.2.7-1; center heights are 600/697 mm. Thus defau
 bottom/top are 445/755 mm and 444/950 mm. No extra curb height is added. This is a
 cosine visualization approximation, NOT an exact standard manufacturing profile:
 rolled edges, thickness, bolts, overlap and validated bend radii are omitted.
-Posts retain their existing simplified geometry, lateral placement and 4 m sampling;
+Posts use a simplified circular mesh with configurable dimensions and sampling;
 connector blocks are temporarily omitted. Upper/lower sheet edges are on the
 post-facing side after a half-period phase shift; nominal depth stays 85 mm.
 The posts have not been redesigned to match every standard protection level.
@@ -52,7 +52,7 @@ existing `rail_height`/`board_base_height`/`board_bottom_height` and
 path uses the default three-wave dimensions. The `direction` field is mapped
 by `guardrailDirection` (1 becomes internal 2; 2 becomes internal 1).
 
-Supports use a post-only template (connector blocks are temporarily omitted) at 4 m horizontal intervals.
+Supports use a post-only template (connector blocks are temporarily omitted) at configurable horizontal intervals (default 4 m).
 `BuildBarrierWaveGeohashSlices` now prepares connected source chains before
 building any geometry. It computes its own offsets; existing SQL `startoffset`
 values and business properties remain untouched. Direct plugin calls without
@@ -76,7 +76,7 @@ Connection rules:
   order; all other values follow reverse order, matching the SQL convention.
   Sampling orientation does not change board normals or support sides.
 - Group by `bxdl` (equivalent to `type`, used as fallback), wave subtype, raw
-  direction, and board height parameters. Unknown classifications are grouped
+  direction, board height parameters, and post spacing. Unknown classifications are grouped
   together; callers should supply a classification to isolate business types.
 - Default horizontal tolerance is 0.05 m, height tolerance 0.05 m, and maximum
   horizontal turn 60 degrees. These are configurable through `options.Chains`.
@@ -241,3 +241,54 @@ These verify wave count, ground-relative elevations, total depth, winding,
 unit normals, UV distance, graded/bent lines and closed-ring seams. The existing
 Geohash test checks true swept surface area and support counts across slicing,
 and validates decoded metadata references after compaction.
+
+## Configurable visible posts
+
+The input line remains ground datum. The default post top is 150 mm above the
+board center: two-wave height 0.445 + 0.310/2 + 0.150 = 0.750 m; three-wave height
+0.444 + 0.506/2 + 0.150 = 0.847 m. This is visible above-ground height; no buried
+portion or tube wall thickness is generated. Connector blocks remain omitted.
+
+Pass global values through the slicer options:
+
+```go
+result, err := road.BuildBarrierWaveGeohashSlices(allFeatures,
+    road.BarrierWaveGeohashOptions{
+        OutputDir: "output/barrier-wave-geohash",
+        Precision: 6,
+        Posts: common.GuardrailPostOptions{
+            Diameter: 0.114,
+            TopAboveBoardCenter: 0.150,
+            // Height: 0.900, // optional fixed ground-relative height
+            Spacing: 4,
+            LateralOffset: 0.230,
+            RadialSegments: 12,
+        },
+    })
+```
+
+A `LineFeature.GuardrailPosts` pointer overrides the global options for that
+feature and also works when using the normal tile builder directly. Zero fields
+mean defaults, so zero top clearance/offset is not an explicit configurable value.
+Positive `Height` takes precedence over the automatic center-plus-clearance rule.
+Changing diameter retains the configured center offset, not the old gap to the
+board. `LateralOffset` is an unsigned horizontal distance from the source line to
+the post center; direction selects the side. Defaults retain the previous 0.230 m
+center placement. Diameter must be at least 0.114 m; nonfinite/negative values and
+radial segments outside 3..256 fail clearly. Units are metres except segment count.
+
+Post spacing is used for both standalone and chain-aware sampling; chains with
+different spacings remain separate. Regular stations stay continuous across source
+parts, and the true chain end may add a final shorter interval as before.
+
+The bundled integration test exposes the same options through environment variables:
+
+```powershell
+$env:MAP3D_TEST_POST_DIAMETER = "0.114"
+$env:MAP3D_TEST_POST_TOP_OFFSET = "0.150"
+$env:MAP3D_TEST_POST_HEIGHT = "0" # auto; positive values select fixed height
+$env:MAP3D_TEST_POST_SPACING = "4"
+$env:MAP3D_TEST_POST_LATERAL_OFFSET = "0.230"
+$env:MAP3D_TEST_POST_SEGMENTS = "12"
+go test ./map3d/road -run '^TestBarrierWaveGeohashSlices$' -count=1 -v
+```
