@@ -24,6 +24,8 @@ import (
 type BarrierWaveGeohashOptions struct {
 	OutputDir string
 	Precision int
+	// Posts supplies global post defaults; a feature-level pointer takes precedence.
+	Posts common.GuardrailPostOptions
 	// Chains configures full-source endpoint connectivity; zero uses safe defaults.
 	Chains common.SidewallChainOptions
 	// DisableChains restores legacy per-part sampling.
@@ -64,6 +66,14 @@ func BuildBarrierWaveGeohashSlices(features []LineFeature, opt BarrierWaveGeohas
 	ctx, err := ResolveTileContextAuto(TileContext{TileID: "barrier-wave-source", SRID: 4326, UseENU: true}, nil, features, nil)
 	if err != nil {
 		return nil, err
+	}
+	// Copy the feature slice before assigning per-build options.
+	features = append([]LineFeature(nil), features...)
+	for i := range features {
+		if features[i].GuardrailPosts == nil {
+			posts := opt.Posts
+			features[i].GuardrailPosts = &posts
+		}
 	}
 	if !opt.DisableChains {
 		coordinates, err := common.NewCoordinatePipeline(ctx)

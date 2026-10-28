@@ -296,11 +296,16 @@ func guardrailInstanceTransforms(line LocalLine, direction int, railHeight, rail
 // 根据护栏线采样点生成支撑结构的位置和方向。
 // 返回的数据用于实例化加载固定支撑模型。
 func guardrailSupportTransforms(line LocalLine) ([]instancedTransform, error) {
+	return guardrailSupportTransformsWithSpacing(line, defaultGuardrailPostSpacing)
+}
+
+// Sample unchanged source anchors with the configured horizontal post spacing.
+func guardrailSupportTransformsWithSpacing(line LocalLine, spacing float32) ([]instancedTransform, error) {
 	points := dedupeLinePoints(line.Points)
 	if len(points) < 2 {
 		return nil, fmt.Errorf("guardrail line requires at least 2 distinct points")
 	}
-	samples := samplePolylineForPosts(points, defaultGuardrailPostSpacing)
+	samples := samplePolylineForPosts(points, spacing)
 	out := make([]instancedTransform, 0, len(samples))
 	for _, s := range samples {
 		out = append(out, instancedTransform{
@@ -325,24 +330,8 @@ func guardrailSupportTransforms(line LocalLine) ([]instancedTransform, error) {
 // 返回：
 // 顶点、法线、UV以及索引数据。
 func buildGuardrailSupportMesh(direction int, railHeight, railHeightAll float32) ([][3]float32, [][3]float32, [][2]float32, []uint32) {
-	sign := float32(-1)
-	if direction == 1 {
-		sign = 1
-	}
-	// The post mesh is rotated as one instanced object; local X needs
-	// to match the previous world-space right-offset direction.
-	sign = -sign
-	postOffset := sign * (defaultGuardrailRailClearance + defaultGuardrailSpacerDepth + defaultGuardrailPostWidth/2)
-
-	var pos [][3]float32
-	var normals [][3]float32
-	var uv [][2]float32
-	var indices []uint32
-
-	appendCylinderGeometry(&pos, &normals, &uv, &indices,
-		[3]float32{postOffset, defaultGuardrailPostHeight / 2, 0},
-		defaultGuardrailPostWidth, defaultGuardrailPostHeight, defaultGuardrailPostDepth, 12)
-	return pos, normals, uv, indices
+	posts, _ := resolveGuardrailPosts(nil, railHeight, railHeightAll)
+	return buildGuardrailPostMesh(direction, posts)
 }
 
 // 根据属性字段获取护栏方向。

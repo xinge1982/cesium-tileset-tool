@@ -149,8 +149,8 @@ func TestGuardrailSupportMeshPostOnly(t *testing.T) {
 		if direction == 1 {
 			sign = -1
 		}
-		offset := sign * (defaultGuardrailRailClearance + defaultGuardrailSpacerDepth + defaultGuardrailPostWidth/2)
-		appendCylinderGeometry(&want, &wn, &wu, &wi, [3]float32{offset, defaultGuardrailPostHeight / 2, 0}, defaultGuardrailPostWidth, defaultGuardrailPostHeight, defaultGuardrailPostDepth, 12)
+		offset := sign * .230
+		appendCylinderGeometry(&want, &wn, &wu, &wi, [3]float32{offset, .750 / 2, 0}, .114, .750, .114, 12)
 		if len(got) != len(want) || len(gi) != len(wi) || len(gn) != len(wn) || len(gu) != len(wu) {
 			t.Fatal("support contains geometry beyond the post")
 		}

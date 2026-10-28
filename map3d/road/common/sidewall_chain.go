@@ -95,8 +95,12 @@ func PrepareSidewallChains(features []LineFeature, coordinates *CoordinatePipeli
 			defaultBase, defaultPanel = defaultGuardrailThreeWaveRailHeight, defaultGuardrailThreeWaveRailHeightAll
 		}
 		base, panel := guardrailRailHeights(f.Fields, defaultBase, defaultPanel)
+		posts, err := resolveGuardrailPosts(f.GuardrailPosts, base, panel)
+		if err != nil {
+			return nil, err
+		}
 		direction := int64FromFields(f.Fields, "direction")
-		group := fmt.Sprintf("%s|%v|%d|%g|%g", kind, class, direction, base, panel)
+		group := fmt.Sprintf("%s|%v|%d|%g|%g|%g", kind, class, direction, base, panel, posts.Spacing)
 		identity := f.Fields["id"]
 		if identity == nil {
 			identity = f.Fields["fid"]
@@ -227,9 +231,16 @@ func chainTangent(points [][3]float32, start bool) [3]float32 {
 	return [3]float32{}
 }
 
-func guardrailChainSupportTransforms(line LocalLine, sampling *LineChainSampling) ([]instancedTransform, error) {
+func guardrailChainSupportTransforms(line LocalLine, sampling *LineChainSampling, configuredSpacing ...float32) ([]instancedTransform, error) {
+	spacing := float64(defaultGuardrailPostSpacing)
+	if len(configuredSpacing) > 0 {
+		spacing = float64(configuredSpacing[0])
+	}
+	if !chainFinite(spacing) || spacing <= 0 {
+		return nil, fmt.Errorf("invalid post spacing")
+	}
 	if sampling == nil {
-		return guardrailSupportTransforms(line)
+		return guardrailSupportTransformsWithSpacing(line, float32(spacing))
 	}
 	if !chainFinite(sampling.StartOffset) || !chainFinite(sampling.Length) || sampling.StartOffset < 0 || sampling.Length <= 0 {
 		return nil, fmt.Errorf("invalid chain stationing")
@@ -243,7 +254,6 @@ func guardrailChainSupportTransforms(line LocalLine, sampling *LineChainSampling
 	if math.Abs(length-sampling.Length) > 1e-5 {
 		return nil, fmt.Errorf("chain geometry changed after preprocessing; prepare before slicing, never reuse on cut fragments")
 	}
-	spacing := float64(defaultGuardrailPostSpacing)
 	// Float32 source positions accumulate small rounding errors. Use a tight
 	// metre epsilon only for ownership at exact station boundaries.
 	const eps = 1e-6
