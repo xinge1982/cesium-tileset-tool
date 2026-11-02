@@ -118,14 +118,40 @@ type TilesetSourceLODConfig struct {
 	LOD2UnmatchedMode string   `yaml:"lod2UnmatchedMode" json:"lod2UnmatchedMode"`
 }
 
+// Configure geometry generated during tileset export; existing sources need no changes.
+type GeneratedRoadConfig struct {
+	BuildType          string                  `yaml:"buildType" json:"buildType"`
+	Precision          int                     `yaml:"precision" json:"precision"`
+	TexturePath        string                  `yaml:"texturePath" json:"texturePath"`
+	CenterlineTable    *TableConfig            `yaml:"centerlineTable" json:"centerlineTable"`
+	WaveSubtype        string                  `yaml:"waveSubtype" json:"waveSubtype"`
+	WaveSubtypeField   string                  `yaml:"waveSubtypeField" json:"waveSubtypeField"`
+	WaveSubtypeMapping map[string]string       `yaml:"waveSubtypeMapping" json:"waveSubtypeMapping"`
+	FilterField        string                  `yaml:"filterField" json:"filterField"`
+	FilterValues       []string                `yaml:"filterValues" json:"filterValues"`
+	Posts              GeneratedRoadPostConfig `yaml:"posts" json:"posts"`
+}
+
+// Configure generated guardrail posts in metres, except radial segment count.
+type GeneratedRoadPostConfig struct {
+	Diameter            float32 `yaml:"diameter" json:"diameter"`
+	TopAboveBoardCenter float32 `yaml:"topAboveBoardCenter" json:"topAboveBoardCenter"`
+	Height              float32 `yaml:"height" json:"height"`
+	Spacing             float32 `yaml:"spacing" json:"spacing"`
+	LateralOffset       float32 `yaml:"lateralOffset" json:"lateralOffset"`
+	RadialSegments      int     `yaml:"radialSegments" json:"radialSegments"`
+}
+
 type TilesetSourceConfig struct {
-	ID         string                 `yaml:"id" json:"id"`
-	Name       string                 `yaml:"name" json:"name"`
-	Match      MatchConfig            `yaml:"match" json:"match"`
-	KeyMapping *KeyMappingConfig      `yaml:"keyMapping,omitempty" json:"keyMapping,omitempty"`
-	Table      TableConfig            `yaml:"table" json:"table"`
-	LOD        TilesetSourceLODConfig `yaml:"lod" json:"lod"`
-	Fields     []FieldConfig          `yaml:"fields" json:"fields"`
+	ModelSource string                 `yaml:"modelSource" json:"modelSource"`
+	Road        *GeneratedRoadConfig   `yaml:"road,omitempty" json:"road,omitempty"`
+	ID          string                 `yaml:"id" json:"id"`
+	Name        string                 `yaml:"name" json:"name"`
+	Match       MatchConfig            `yaml:"match" json:"match"`
+	KeyMapping  *KeyMappingConfig      `yaml:"keyMapping,omitempty" json:"keyMapping,omitempty"`
+	Table       TableConfig            `yaml:"table" json:"table"`
+	LOD         TilesetSourceLODConfig `yaml:"lod" json:"lod"`
+	Fields      []FieldConfig          `yaml:"fields" json:"fields"`
 }
 
 type TilesetLODConfig struct {

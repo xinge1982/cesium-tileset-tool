@@ -158,28 +158,29 @@ type outputFileStats struct {
 }
 
 type tilesetGenerationReport struct {
-	Version                int                  `json:"version"`
-	Status                 string               `json:"status"`
-	Error                  string               `json:"error,omitempty"`
-	Warnings               []string             `json:"warnings"`
-	ConfigName             string               `json:"configName"`
-	PartitionTable         string               `json:"partitionTable"`
-	Bound                  string               `json:"bound"`
-	OutputDirectory        string               `json:"outputDirectory"`
-	TilesetPath            string               `json:"tilesetPath"`
-	StartedAt              string               `json:"startedAt"`
-	CompletedAt            string               `json:"completedAt"`
-	DurationMilliseconds   int64                `json:"durationMilliseconds"`
-	StageMilliseconds      map[string]int64     `json:"stageMilliseconds"`
-	LeafTilesFound         int                  `json:"leafTilesFound"`
-	LeafTilesWithData      int                  `json:"leafTilesWithData"`
-	LeafTilesWithoutData   int                  `json:"leafTilesWithoutData"`
-	LeafTilesGenerated     int                  `json:"leafTilesGenerated"`
-	LeafTilesWithoutOutput int                  `json:"leafTilesWithoutOutput"`
-	TilesetSplitLevel      int                  `json:"tilesetSplitLevel"`
-	ExternalTilesets       int                  `json:"externalTilesets"`
-	LOD                    []lodGenerationStats `json:"lod"`
-	Files                  outputFileStats      `json:"files"`
+	GeneratedRoads         []GeneratedRoadOutput `json:"generatedRoads,omitempty"`
+	Version                int                   `json:"version"`
+	Status                 string                `json:"status"`
+	Error                  string                `json:"error,omitempty"`
+	Warnings               []string              `json:"warnings"`
+	ConfigName             string                `json:"configName"`
+	PartitionTable         string                `json:"partitionTable"`
+	Bound                  string                `json:"bound"`
+	OutputDirectory        string                `json:"outputDirectory"`
+	TilesetPath            string                `json:"tilesetPath"`
+	StartedAt              string                `json:"startedAt"`
+	CompletedAt            string                `json:"completedAt"`
+	DurationMilliseconds   int64                 `json:"durationMilliseconds"`
+	StageMilliseconds      map[string]int64      `json:"stageMilliseconds"`
+	LeafTilesFound         int                   `json:"leafTilesFound"`
+	LeafTilesWithData      int                   `json:"leafTilesWithData"`
+	LeafTilesWithoutData   int                   `json:"leafTilesWithoutData"`
+	LeafTilesGenerated     int                   `json:"leafTilesGenerated"`
+	LeafTilesWithoutOutput int                   `json:"leafTilesWithoutOutput"`
+	TilesetSplitLevel      int                   `json:"tilesetSplitLevel"`
+	ExternalTilesets       int                   `json:"externalTilesets"`
+	LOD                    []lodGenerationStats  `json:"lod"`
+	Files                  outputFileStats       `json:"files"`
 }
 
 type tileGenerationStats struct {
@@ -570,6 +571,9 @@ func UpdateTileByGeoHash(configName string, partitionTable string, tilesetsFolde
 		return fmt.Errorf("no partition table for %s:%s", configName, partitionTable)
 	}
 
+	if handled, err := regenerateRoadAwareTileset(configName, partitionTable, tilesetsFolder, geoTable); handled || err != nil {
+		return err
+	}
 	db := dbc.DB
 
 	var leafTiles []*GeoHashTile
@@ -873,6 +877,22 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 		}
 	}()
 
+	// 查找数据配置
+	var geoTable GeoTable
+	for _, tile := range AllTiles {
+		if tile.PartitionTableName == partitionTable {
+			geoTable = tile
+		}
+	}
+	if len(geoTable.PartitionTableName) == 0 {
+		return nil, fmt.Errorf("no partition table for %s:%s", configName, partitionTable)
+	}
+
+	existingSources, _, errSources := splitRoadModelSources(geoTable)
+	if errSources != nil {
+		return nil, errSources
+	}
+
 	dbc := pg.GetConn(configName)
 	if dbc == nil {
 		return nil, fmt.Errorf("database connection is empty")
@@ -884,7 +904,9 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	// 取所有叶子节点
 	var leafTiles []*GeoHashTile
 	stageStarted := time.Now()
-	err := db.Raw(fmt.Sprintf(`
+	var err error
+	if len(existingSources.GeoTableNames) > 0 {
+		err = db.Raw(fmt.Sprintf(`
         SELECT parent.geohash, parent.level, parent.total_count,
 			   ST_XMin(bbox) AS minx,
 			   ST_YMin(bbox) AS miny,
@@ -901,22 +923,12 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
         AND parent.total_count > 0
 		AND ST_Intersects(parent.bbox, ST_MakeEnvelope(?, ?, ?, ?, 4326));
     `, partitionTable, partitionTable), bound.args()...).Scan(&leafTiles).Error
+	}
 	if err != nil {
 		return nil, err
 	}
 	report.StageMilliseconds["queryLeafTiles"] = time.Since(stageStarted).Milliseconds()
 	report.LeafTilesFound = len(leafTiles)
-
-	// 查找数据配置
-	var geoTable GeoTable
-	for _, tile := range AllTiles {
-		if tile.PartitionTableName == partitionTable {
-			geoTable = tile
-		}
-	}
-	if len(geoTable.PartitionTableName) == 0 {
-		return nil, fmt.Errorf("no partition table for %s:%s", configName, partitionTable)
-	}
 
 	// 收集geohash
 	now := time.Now()
@@ -932,7 +944,7 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	report.TilesetSplitLevel = splitLevel
 	// 构建叶子节点
 	stageStarted = time.Now()
-	tilesByGeohash, jobStats, errG := doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable, bound)
+	tilesByGeohash, jobStats, errG := doTileJob(db, now, configName, leafTiles, existingSources, tilesetsFolder, partitionTable, bound)
 	report.StageMilliseconds["buildLeafTiles"] = time.Since(stageStarted).Milliseconds()
 	for _, stats := range jobStats {
 		mergeTileGenerationStats(report, stats)
@@ -1075,6 +1087,17 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	if err != nil {
 		return nil, err
 	}
+
+	roadStarted := time.Now()
+	generated, err := GenerateRoadSourceModels(context.Background(), db, geoTable, tilesetsFolder, boundStr)
+	if err != nil {
+		return nil, err
+	}
+	if err = attachGeneratedRoadModels(tileset, generated); err != nil {
+		return nil, err
+	}
+	report.GeneratedRoads = generated
+	report.StageMilliseconds["generateRoadGeometry"] = time.Since(roadStarted).Milliseconds()
 
 	data, err := json.MarshalIndent(tileset, "", "  ")
 	if err != nil {
@@ -1251,6 +1274,9 @@ func recordLODGenerationStats(stats *tileGenerationStats, cfg *config.Config,
 
 func doTileJob(db *gorm.DB, now time.Time, configName string, leafTiles []*GeoHashTile, geoTable GeoTable, tilesetsFolder string, partitionTable string, bound projectBound) (map[string]*TileNode, []tileGenerationStats, error) {
 	tilesByGeohash := make(map[string]*TileNode)
+	if len(leafTiles) == 0 {
+		return tilesByGeohash, nil, nil
+	}
 	workerCount := 8 // tune this based on CPU / DB capacity
 	cfg := config.Instance()
 	lodLevels := configuredTileLODLevels(geoTable.LOD)
@@ -1503,6 +1529,13 @@ func loadLODModelsBySource(cfg *config.Config, geoTable GeoTable, level tileLODL
 		tableName := instances[0].TableName
 		sourceLOD := config.TilesetSourceLODConfig{}
 		if sourceCfg, ok := geoTable.TilesetSources[tableName]; ok {
+			mode, err := ResolveModelSource(sourceCfg)
+			if err != nil {
+				return nil, err
+			}
+			if mode == ModelSourceGeneratedRoad {
+				return nil, fmt.Errorf("generated road table %s cannot use existing-model LOD loaders", tableName)
+			}
 			sourceLOD = sourceCfg.LOD
 		}
 		mode, err := resolveLODModelMode(sourceLOD, level.Level, instances[0].Model)
@@ -1708,6 +1741,13 @@ func buildTileByHashModels(models map[string][]*GeoHashModel, tile *GeoHashTile,
 func queryGeoHashModelData(configName string, tile GeoTable, db *gorm.DB, geoHash string, dataTable string, bound projectBound) (map[string][]*GeoHashModel, error) {
 	var models = make(map[string][]*GeoHashModel)
 	for _, name := range tile.GeoTableNames {
+		mode, err := ResolveModelSource(tile.TilesetSources[name])
+		if err != nil {
+			return nil, err
+		}
+		if mode == ModelSourceGeneratedRoad {
+			continue
+		}
 		if len(dataTable) > 0 && dataTable != name {
 			continue
 		}
@@ -1887,6 +1927,9 @@ func UpdateGeoHashTileByDataLngLats(configName string, partitionTable string, ti
 		return partitionNeedRefresh, fmt.Errorf("no partition table for %s:%s", configName, partitionTable)
 	}
 
+	if handled, err := regenerateRoadAwareTileset(configName, partitionTable, tilesetsFolder, geoTable); handled || err != nil {
+		return false, err
+	}
 	db := dbc.DB
 	// 取所有叶子节点
 	var leafTiles []*GeoHashTile

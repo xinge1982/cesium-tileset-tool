@@ -1,6 +1,7 @@
 package common
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -279,6 +280,7 @@ func buildNewJerseyBarrierMesh(line LocalLine, width, height float32, direction 
 //	float32
 //	float64
 //	string
+//	json.Number
 //
 // 主要用于解析 GeoJSON properties 中
 // 可能存在的动态类型字段。
@@ -301,6 +303,11 @@ func int64FromFields(fields FeatureFields, key string) int64 {
 		return int64(x)
 	case float64:
 		return int64(x)
+	case json.Number:
+		n, err := x.Int64()
+		if err == nil {
+			return n
+		}
 	case string:
 		n, err := strconv.ParseInt(strings.TrimSpace(x), 10, 64)
 		if err == nil {

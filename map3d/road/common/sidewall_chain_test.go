@@ -1,6 +1,7 @@
 package common
 
 import (
+	"encoding/json"
 	"math"
 	"reflect"
 	"testing"
@@ -215,5 +216,20 @@ func TestSidewallChainShortOpenNotClosed(t *testing.T) {
 	p := chainTestPrepare(t, []LineFeature{chainTestFeature(1, 2, geom.Coord{0, 0, 0}, geom.Coord{0.04, 0, 0})})
 	if !p[0].ChainSampling[0].IncludeEnd || len(chainTestStations(t, p)[0]) != 2 {
 		t.Fatal("short open line treated as loop")
+	}
+}
+
+// Keep database JSON numbers consistent with ordinary GeoJSON direction fields.
+func TestSidewallChainJSONNumberDirection(t *testing.T) {
+	feature := chainTestFeature(1, 2, geom.Coord{0, 0, 0}, geom.Coord{10.3, 0, 0})
+	expected := chainTestStations(t, chainTestPrepare(t, []LineFeature{feature}))
+	feature.Fields["direction"] = json.Number("2")
+	actual := chainTestStations(t, chainTestPrepare(t, []LineFeature{feature}))
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("database direction changed post stations: got %v, want %v", actual, expected)
+	}
+	feature.Fields["id"] = json.Number("9007199254740993")
+	if got := int64FromFields(feature.Fields, "id"); got != 9007199254740993 {
+		t.Fatalf("integer precision lost: %d", got)
 	}
 }

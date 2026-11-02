@@ -72,6 +72,13 @@ func RoadSurfaceFeaturesFromGeoJSON(fc *geojson.FeatureCollection, texturePath s
 		}
 		fields := featureFieldsFromGeoJSON(fc.Features[i].Properties)
 		fields["feature_type"] = "surface"
+		if fields["road_id"] == nil && fields["hroad_id"] != nil {
+			fields["road_id"] = fields["hroad_id"]
+		}
+		material := MaterialRef{Path: texturePath, Mode: MaterialModeTexture, DoubleSided: true}
+		if texturePath == "" {
+			material = MaterialRef{Color: "#555555", Mode: MaterialModeColor, DoubleSided: true}
+		}
 		features = append(features, SurfaceFeature{
 			FeatureInput: FeatureInput{
 				BuildType: BuildTypeRoadSurface,
@@ -81,9 +88,9 @@ func RoadSurfaceFeaturesFromGeoJSON(fc *geojson.FeatureCollection, texturePath s
 			},
 			Thickness: 0,
 			Material: MaterialSet{
-				Top:    MaterialRef{Path: texturePath, Mode: MaterialModeTexture, DoubleSided: true},
-				Side:   MaterialRef{Path: texturePath, Mode: MaterialModeTexture, DoubleSided: true},
-				Bottom: MaterialRef{Path: texturePath, Mode: MaterialModeTexture, DoubleSided: true},
+				Top:    material,
+				Side:   material,
+				Bottom: material,
 			},
 			UV: UVOptions{Mapping: UVMappingPlanar, RepeatX: 8, RepeatY: 8, FlipV: true, ScaleByMeters: true},
 		})
