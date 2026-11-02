@@ -296,11 +296,9 @@ func InitTileSetTables(db *gorm.DB, boundStr string) error {
 		return err
 	}
 	for _, table := range AllTiles {
-		existing, _, sourceErr := splitRoadModelSources(table)
-		if sourceErr != nil {
+		if _, sourceErr := roadModelSources(table); sourceErr != nil {
 			return sourceErr
 		}
-		table = existing
 		if len(table.GeoTableNames) == 0 {
 			continue
 		}
@@ -332,11 +330,9 @@ func RemoveExpired(db *gorm.DB, expire time.Time, boundStr string) error {
 		return err
 	}
 	for _, table := range AllTiles {
-		existing, _, sourceErr := splitRoadModelSources(table)
-		if sourceErr != nil {
+		if _, sourceErr := roadModelSources(table); sourceErr != nil {
 			return sourceErr
 		}
-		table = existing
 		if len(table.GeoTableNames) == 0 {
 			continue
 		}
@@ -394,11 +390,9 @@ func RefineUntilStable(db *gorm.DB, boundStr string, outputDirectory string) (re
 		return err
 	}
 	for _, table := range AllTiles {
-		existing, _, sourceErr := splitRoadModelSources(table)
-		if sourceErr != nil {
+		if _, sourceErr := roadModelSources(table); sourceErr != nil {
 			return sourceErr
 		}
-		table = existing
 		if len(table.GeoTableNames) == 0 {
 			continue
 		}
@@ -423,7 +417,7 @@ func RefineUntilStable(db *gorm.DB, boundStr string, outputDirectory string) (re
 		tableStats.MinLevel = minLevel
 		var level = minLevel
 		countUpdateStartedAt := time.Now()
-		if errU := UpdatePartitionCount(db, table.GeoTableNames, table.PartitionTableName, "", level, table.Threshold, bound); errU != nil {
+		if errU := updateSourcePartitionCount(db, table, "", level, bound); errU != nil {
 			return fmt.Errorf("failed to update partition count: %v", errU)
 		}
 		tableStats.InitialCountUpdateMilliseconds = time.Since(countUpdateStartedAt).Milliseconds()
@@ -485,7 +479,11 @@ func refinePartitionsWithStats(db *gorm.DB, table GeoTable, level int16, workerC
 			return fmt.Errorf("failed to get need refine partitions: %w", err)
 		}
 
-		if len(partitions) == 0 {
+		roads, sourceErr := roadModelSources(table)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		if len(partitions) == 0 && len(roads) == 0 {
 			if errC := CleanupChildren(tx, table.PartitionTableName, "", level+1, bound); errC != nil {
 				return fmt.Errorf("failed to cleanup empty children: %w", errC)
 			}
@@ -512,11 +510,11 @@ func refinePartitionsWithStats(db *gorm.DB, table GeoTable, level int16, workerC
 					return fmt.Errorf("partition %s: create child partitions failed: %w", p.Geohash, errC)
 				}
 
-				if errC := UpdatePartitionCount(tx, table.GeoTableNames, table.PartitionTableName, p.Geohash, level+1, table.Threshold, bound); errC != nil {
+				if errC := updateSourcePartitionCount(tx, table, p.Geohash, level+1, bound); errC != nil {
 					return fmt.Errorf("partition %s: update partition count failed: %w", p.Geohash, errC)
 				}
 
-				if errC := CleanupChildren(tx, table.PartitionTableName, p.Geohash, level+1, bound); errC != nil {
+				if errC := cleanupSourceChildren(tx, table, p.Geohash, level+1, bound); errC != nil {
 					return fmt.Errorf("partition %s: cleanup children failed: %w", p.Geohash, errC)
 				}
 

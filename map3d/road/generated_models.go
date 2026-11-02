@@ -20,11 +20,17 @@ type RoadModelInput struct {
 }
 
 // Select a road generator independently of pre-existing device/building GLBs.
-// Bound currently retains whole features; it does not cut at the project border.
+// Bound retains contained features; IntersectBound selects crossings after chain preparation.
+// Geohashes with ModelsOnly let the traffic exporter own the adaptive hierarchy.
 type RoadModelOptions struct {
+	// Select intersecting original features without clipping their geometry.
+	IntersectBound *[4]float64
+
 	BuildType          BuildType
 	OutputDir          string
 	Precision          int
+	Geohashes          []string
+	ModelsOnly         bool
 	Bound              string
 	TexturePath        string
 	WaveSubtype        string
@@ -35,8 +41,8 @@ type RoadModelOptions struct {
 	BuildOptions       *BuildOptions
 }
 
-// Return a generated child tileset with a world-space box for parent attachment.
-// Its internal ENU transform remains in the child JSON and must not be applied twice.
+// Return generated GLB leaves, optionally with a standalone tileset.
+// With ModelsOnly, use each tile Box/Transform; TilesetPath and WorldBox stay empty.
 type RoadModelResult struct {
 	TilesetPath     string
 	Tiles           []RoadSurfaceGeohashTile
@@ -65,7 +71,7 @@ func BuildRoadModelSlices(ctx context.Context, input RoadModelInput, opt RoadMod
 		if err := validateRoadModelGeometry(input.Features, true); err != nil {
 			return nil, err
 		}
-		result, err := BuildRoadSurfaceGeohashSlices(input.Features, input.Centerlines, RoadSurfaceGeohashOptions{OutputDir: opt.OutputDir, Precision: opt.Precision, Bound: opt.Bound, TexturePath: opt.TexturePath, BuildOptions: opt.BuildOptions})
+		result, err := BuildRoadSurfaceGeohashSlices(input.Features, input.Centerlines, RoadSurfaceGeohashOptions{OutputDir: opt.OutputDir, Precision: opt.Precision, Geohashes: opt.Geohashes, ModelsOnly: opt.ModelsOnly, IntersectBound: opt.IntersectBound, Bound: opt.Bound, TexturePath: opt.TexturePath, BuildOptions: opt.BuildOptions})
 		if err != nil {
 			return nil, err
 		}
@@ -75,7 +81,7 @@ func BuildRoadModelSlices(ctx context.Context, input RoadModelInput, opt RoadMod
 		if err != nil {
 			return nil, err
 		}
-		options := BarrierWaveGeohashOptions{OutputDir: opt.OutputDir, Precision: opt.Precision, Posts: opt.Posts, Chains: opt.Chains}
+		options := BarrierWaveGeohashOptions{OutputDir: opt.OutputDir, Precision: opt.Precision, Geohashes: opt.Geohashes, ModelsOnly: opt.ModelsOnly, IntersectBound: opt.IntersectBound, Posts: opt.Posts, Chains: opt.Chains}
 		if opt.Bound != "" {
 			bound, err := ParseRoadSurfaceBound(opt.Bound)
 			if err != nil {
@@ -93,6 +99,9 @@ func BuildRoadModelSlices(ctx context.Context, input RoadModelInput, opt RoadMod
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if opt.ModelsOnly {
+		return &RoadModelResult{Tiles: tiles, SourceInstances: instances}, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -832,7 +832,12 @@ func writeExternalTilesets(tileset *Tileset, outputDirectory string, splitLevel 
 }
 
 // 生成分片数据
-func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFolder string, boundStr string) (tilesetResult *Tileset, resultErr error) {
+func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFolder string, boundStr string) (*Tileset, error) {
+	return generateAllGeoHashTile(nil, configName, partitionTable, tilesetsFolder, boundStr)
+}
+
+// Share the production export path with database-backed regression tests.
+func generateAllGeoHashTile(db *gorm.DB, configName, partitionTable, tilesetsFolder, boundStr string) (tilesetResult *Tileset, resultErr error) {
 	started := time.Now()
 	if configName == "" {
 		return nil, fmt.Errorf("configName is empty")
@@ -888,25 +893,25 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 		return nil, fmt.Errorf("no partition table for %s:%s", configName, partitionTable)
 	}
 
-	existingSources, _, errSources := splitRoadModelSources(geoTable)
+	roadSources, errSources := roadModelSources(geoTable)
 	if errSources != nil {
 		return nil, errSources
 	}
 
-	dbc := pg.GetConn(configName)
-	if dbc == nil {
-		return nil, fmt.Errorf("database connection is empty")
+	if db == nil {
+		dbc := pg.GetConn(configName)
+		if dbc == nil {
+			return nil, fmt.Errorf("database connection is empty")
+		}
+		db = dbc.DB
 	}
-
 	log.Infof("generate hash tile for %s", configName)
 
-	db := dbc.DB
 	// 取所有叶子节点
 	var leafTiles []*GeoHashTile
 	stageStarted := time.Now()
 	var err error
-	if len(existingSources.GeoTableNames) > 0 {
-		err = db.Raw(fmt.Sprintf(`
+	err = db.Raw(fmt.Sprintf(`
         SELECT parent.geohash, parent.level, parent.total_count,
 			   ST_XMin(bbox) AS minx,
 			   ST_YMin(bbox) AS miny,
@@ -923,7 +928,6 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
         AND parent.total_count > 0
 		AND ST_Intersects(parent.bbox, ST_MakeEnvelope(?, ?, ?, ?, 4326));
     `, partitionTable, partitionTable), bound.args()...).Scan(&leafTiles).Error
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -933,6 +937,9 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	// 收集geohash
 	now := time.Now()
 	lodLevels := configuredTileLODLevels(geoTable.LOD)
+	if len(roadSources) > 0 {
+		lodLevels = nil
+	}
 	for _, level := range lodLevels {
 		report.LOD = append(report.LOD, lodGenerationStats{
 			LOD: level.Level, ModelFolder: level.ModelFolder,
@@ -941,10 +948,23 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 	}
 	geohashErrorBase := geohashGeometricErrorBase(lodLevels)
 	splitLevel := effectiveTilesetSplitLevel(geoTable.TilesetSplitLevel)
+	if len(roadSources) > 0 {
+		splitLevel = 0
+	}
 	report.TilesetSplitLevel = splitLevel
 	// 构建叶子节点
 	stageStarted = time.Now()
-	tilesByGeohash, jobStats, errG := doTileJob(db, now, configName, leafTiles, existingSources, tilesetsFolder, partitionTable, bound)
+	var tilesByGeohash map[string]*TileNode
+	var jobStats []tileGenerationStats
+	var errG error
+	if len(roadSources) > 0 {
+		tilesByGeohash, report.GeneratedRoads, errG = GenerateRoadSourceModels(context.Background(), db, geoTable, leafTiles, tilesetsFolder, boundStr)
+		for _, leaf := range leafTiles {
+			jobStats = append(jobStats, tileGenerationStats{queried: true, hasData: tilesByGeohash[leaf.Geohash] != nil})
+		}
+	} else {
+		tilesByGeohash, jobStats, errG = doTileJob(db, now, configName, leafTiles, geoTable, tilesetsFolder, partitionTable, bound)
+	}
 	report.StageMilliseconds["buildLeafTiles"] = time.Since(stageStarted).Milliseconds()
 	for _, stats := range jobStats {
 		mergeTileGenerationStats(report, stats)
@@ -1082,22 +1102,12 @@ func GenerateAllGeoHashTile(configName string, partitionTable string, tilesetsFo
 		}},
 	}
 	tileset.Asset.Version = "1.1"
-	report.ExternalTilesets, err = writeExternalTilesets(
-		tileset, tilesetsFolder, splitLevel, now.Format("20060102150405"))
-	if err != nil {
-		return nil, err
+	if len(roadSources) == 0 {
+		report.ExternalTilesets, err = writeExternalTilesets(tileset, tilesetsFolder, splitLevel, now.Format("20060102150405"))
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	roadStarted := time.Now()
-	generated, err := GenerateRoadSourceModels(context.Background(), db, geoTable, tilesetsFolder, boundStr)
-	if err != nil {
-		return nil, err
-	}
-	if err = attachGeneratedRoadModels(tileset, generated); err != nil {
-		return nil, err
-	}
-	report.GeneratedRoads = generated
-	report.StageMilliseconds["generateRoadGeometry"] = time.Since(roadStarted).Milliseconds()
 
 	data, err := json.MarshalIndent(tileset, "", "  ")
 	if err != nil {
