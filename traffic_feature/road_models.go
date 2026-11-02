@@ -10,10 +10,10 @@ import (
 	"sort"
 	"strings"
 
-	"cesium-tileset-tool/cesium"
 	"cesium-tileset-tool/config"
 	"cesium-tileset-tool/map3d/road"
 	roadcommon "cesium-tileset-tool/map3d/road/common"
+	"cesium-tileset-tool/pg"
 	"github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/encoding/geojson"
 	"gorm.io/gorm"
@@ -47,170 +47,239 @@ func ResolveModelSource(source config.TilesetSourceConfig) (string, error) {
 		default:
 			return "", fmt.Errorf("unsupported road buildType %q", source.Road.BuildType)
 		}
-		if source.Road.Precision != 0 && (source.Road.Precision < 4 || source.Road.Precision > 7) {
-			return "", fmt.Errorf("road precision must be 4..7")
-		}
 	default:
 		return "", fmt.Errorf("unsupported modelSource %q", mode)
 	}
 	return mode, nil
 }
 
-// Keep procedural geometry out of the old point-model partition and LOD path.
-func splitRoadModelSources(table GeoTable) (GeoTable, []config.TilesetSourceConfig, error) {
-	existing := table
-	existing.GeoTableNames = nil
-	generated := []config.TilesetSourceConfig{}
+// A road export owns its partition tree; device/building exports keep their old path.
+func roadModelSources(table GeoTable) ([]config.TilesetSourceConfig, error) {
+	sources := []config.TilesetSourceConfig{}
+	existing := false
 	for _, name := range table.GeoTableNames {
 		source := table.TilesetSources[name]
 		mode, err := ResolveModelSource(source)
 		if err != nil {
-			return existing, nil, err
+			return nil, err
 		}
-		if mode == ModelSourceGeneratedRoad {
-			if source.Table.Name == "" {
-				return existing, nil, fmt.Errorf("generated source %s has no table", source.ID)
-			}
-			generated = append(generated, source)
-		} else {
-			existing.GeoTableNames = append(existing.GeoTableNames, name)
+		if mode == ModelSourceExisting {
+			existing = true
+			continue
 		}
+		if source.Table.Name == "" {
+			return nil, fmt.Errorf("generated source %s has no table", source.ID)
+		}
+		sources = append(sources, source)
 	}
-	sort.Slice(generated, func(i, j int) bool { return generated[i].Table.Name < generated[j].Table.Name })
-	return existing, generated, nil
+	if existing && len(sources) > 0 {
+		return nil, fmt.Errorf("road geometry and existing device/building models require separate tileset configurations")
+	}
+	return sources, nil
 }
 
-// Report geometry built in this run rather than GLBs looked up on disk or MinIO.
+// Report source geometry generated directly into the database leaf hierarchy.
 type GeneratedRoadOutput struct {
-	SourceID        string      `json:"sourceID"`
-	Table           string      `json:"table"`
-	BuildType       string      `json:"buildType"`
-	TilesetURI      string      `json:"tilesetURI"`
-	Tiles           int         `json:"tiles"`
-	SourceInstances int         `json:"sourceInstances"`
-	WorldBox        [12]float64 `json:"-"`
-	GeometricError  float64     `json:"-"`
+	SourceID        string `json:"sourceID"`
+	Table           string `json:"table"`
+	BuildType       string `json:"buildType"`
+	Tiles           int    `json:"tiles"`
+	SourceInstances int    `json:"sourceInstances"`
 }
 
 type roadFeatureLoader func(context.Context, config.TableConfig, *config.GeneratedRoadConfig) (*geojson.FeatureCollection, error)
 
-// Generate road child tilesets from database geometry during the main export.
-// Source tables are read before bound filtering to retain full barrier-chain phase.
-func GenerateRoadSourceModels(ctx context.Context, db *gorm.DB, table GeoTable, outputDirectory, bound string) ([]GeneratedRoadOutput, error) {
+// Build GLBs for the database leaves selected by the refinement pass.
+// The caller owns the hierarchy and writes the single road tileset.json.
+func GenerateRoadSourceModels(ctx context.Context, db *gorm.DB, table GeoTable, leaves []*GeoHashTile, outputDirectory, bound string) (map[string]*TileNode, []GeneratedRoadOutput, error) {
 	if db == nil {
-		return nil, fmt.Errorf("road generation database is nil")
+		return nil, nil, fmt.Errorf("road generation database is nil")
 	}
-	return generateRoadSourceModels(ctx, table, outputDirectory, bound, func(ctx context.Context, t config.TableConfig, options *config.GeneratedRoadConfig) (*geojson.FeatureCollection, error) {
+	return generateRoadSourceModels(ctx, table, leaves, outputDirectory, bound, func(ctx context.Context, t config.TableConfig, options *config.GeneratedRoadConfig) (*geojson.FeatureCollection, error) {
 		return readRoadFeatureCollection(ctx, db, t, options)
 	})
 }
 
-// Keep the geometry loader injectable so the complete export path can be tested offline.
-func generateRoadSourceModels(ctx context.Context, table GeoTable, outputDirectory, bound string, load roadFeatureLoader) ([]GeneratedRoadOutput, error) {
-	_, sources, err := splitRoadModelSources(table)
+// Preserve complete geometry and chain context; clip meshes only at final leaf edges.
+func generateRoadSourceModels(ctx context.Context, table GeoTable, leaves []*GeoHashTile, outputDirectory, bound string, load roadFeatureLoader) (map[string]*TileNode, []GeneratedRoadOutput, error) {
+	sources, err := roadModelSources(table)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	nodes := map[string]*TileNode{}
 	outputs := []GeneratedRoadOutput{}
-	if len(sources) == 0 {
-		return outputs, nil
+	if len(sources) == 0 || len(leaves) == 0 {
+		return nodes, outputs, nil
 	}
-	if ctx == nil || load == nil {
-		return nil, fmt.Errorf("road generation requires context and loader")
+	if ctx == nil || load == nil || outputDirectory == "" {
+		return nil, nil, fmt.Errorf("road generation requires context, loader and output directory")
 	}
 	bounds, err := road.ParseRoadSurfaceBound(bound)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	for _, source := range sources {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	hashes := make([]string, 0, len(leaves))
+	byHash := map[string]*GeoHashTile{}
+	for _, leaf := range leaves {
+		if leaf == nil || leaf.Level != len(leaf.Geohash) {
+			return nil, nil, fmt.Errorf("invalid road database leaf")
+		}
+		if _, exists := byHash[leaf.Geohash]; exists {
+			return nil, nil, fmt.Errorf("duplicate road database leaf %s", leaf.Geohash)
+		}
+		byHash[leaf.Geohash] = leaf
+		hashes = append(hashes, leaf.Geohash)
+	}
+	parent := filepath.Join(outputDirectory, "road-models")
+	if err = os.MkdirAll(parent, 0755); err != nil {
+		return nil, nil, err
+	}
+	runDir, err := os.MkdirTemp(parent, "run-")
+	if err != nil {
+		return nil, nil, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = os.RemoveAll(runDir)
+		}
+	}()
+	for i, source := range sources {
+		if err = ctx.Err(); err != nil {
+			return nil, nil, err
 		}
 		options := source.Road
 		collection, err := load(ctx, source.Table, options)
 		if err != nil {
-			return nil, fmt.Errorf("load generated source %s: %w", source.Table.Name, err)
+			return nil, nil, fmt.Errorf("load road source %s: %w", source.Table.Name, err)
 		}
 		if collection == nil || len(collection.Features) == 0 {
-			continue
-		}
-		// Empty bounds are normal, but crossing geometries are not silently pre-clipped.
-		// Full original collections are passed to the generator after this emptiness check.
-		if len(road.FilterRoadSurfaceInputBound(collection, bounds).Features) == 0 {
 			continue
 		}
 		var centerlines *geojson.FeatureCollection
 		if options.CenterlineTable != nil {
 			centerlines, err = load(ctx, *options.CenterlineTable, nil)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-		}
-		// A run-specific directory prevents stale files/cached GLBs from replacing new geometry.
-		parent := filepath.Join(outputDirectory, "generated-road")
-		if err = os.MkdirAll(parent, 0755); err != nil {
-			return nil, err
-		}
-		dir, err := os.MkdirTemp(parent, "source-")
-		if err != nil {
-			return nil, err
 		}
 		p := options.Posts
 		result, err := road.BuildRoadModelSlices(ctx, road.RoadModelInput{Features: collection, Centerlines: centerlines}, road.RoadModelOptions{
-			BuildType: road.BuildType(options.BuildType), OutputDir: dir, Precision: options.Precision, Bound: bound, TexturePath: options.TexturePath,
+			BuildType: road.BuildType(options.BuildType), OutputDir: filepath.Join(runDir, fmt.Sprintf("source-%d", i)),
+			Geohashes: hashes, ModelsOnly: true, IntersectBound: &bounds, TexturePath: options.TexturePath,
 			WaveSubtype: options.WaveSubtype, WaveSubtypeField: options.WaveSubtypeField, WaveSubtypeMapping: options.WaveSubtypeMapping,
 			Posts: roadcommon.GuardrailPostOptions{Diameter: p.Diameter, TopAboveBoardCenter: p.TopAboveBoardCenter, Height: p.Height, Spacing: p.Spacing, LateralOffset: p.LateralOffset, RadialSegments: p.RadialSegments},
 		})
 		if err != nil {
-			_ = os.RemoveAll(dir)
-			return nil, fmt.Errorf("generate %s geometry: %w", source.Table.Name, err)
+			return nil, nil, fmt.Errorf("generate %s geometry: %w", source.Table.Name, err)
 		}
-		relative, err := filepath.Rel(outputDirectory, result.TilesetPath)
-		if err != nil {
-			return nil, err
+		for _, built := range result.Tiles {
+			leaf, ok := byHash[built.Geohash]
+			if !ok {
+				return nil, nil, fmt.Errorf("generator returned non-database leaf %s", built.Geohash)
+			}
+			relative, err := filepath.Rel(outputDirectory, built.GLBPath)
+			if err != nil {
+				return nil, nil, err
+			}
+			node := nodes[built.Geohash]
+			if node == nil {
+				node = &TileNode{Geohash: leaf.Geohash, Level: leaf.Level, Refine: "ADD"}
+				nodes[built.Geohash] = node
+			}
+			transform := built.Transform
+			// Existing hierarchy refresh expects a world box and converts it once.
+			node.Children = append(node.Children, &TileNode{BoundingVolume: BoundingVolume{Box: roadWorldBox(built.Box, transform)}, Transform: &transform, Content: &TileContent{Uri: filepath.ToSlash(relative)}, Refine: "ADD"})
 		}
-		outputs = append(outputs, GeneratedRoadOutput{SourceID: source.ID, Table: source.Table.Name, BuildType: options.BuildType, TilesetURI: filepath.ToSlash(relative), Tiles: len(result.Tiles), SourceInstances: result.SourceInstances, WorldBox: result.WorldBox, GeometricError: result.GeometricError})
+		outputs = append(outputs, GeneratedRoadOutput{SourceID: source.ID, Table: source.Table.Name, BuildType: options.BuildType, Tiles: len(result.Tiles), SourceInstances: result.SourceInstances})
 	}
-	return outputs, nil
+	success = true
+	return nodes, outputs, nil
 }
 
-// Quote identifiers separately and bind category filters rather than accepting raw SQL.
-func roadFeatureQuery(table config.TableConfig, options *config.GeneratedRoadConfig) (string, []any, error) {
+// Transform the center as a point and the half axes as vectors into ECEF.
+func roadWorldBox(box [12]float64, m [16]float64) (world [12]float64) {
+	for part := 0; part < 4; part++ {
+		for axis := 0; axis < 3; axis++ {
+			world[part*3+axis] = m[axis]*box[part*3] + m[4+axis]*box[part*3+1] + m[8+axis]*box[part*3+2]
+			if part == 0 {
+				world[axis] += m[12+axis]
+			}
+		}
+	}
+	return
+}
+
+// Quote schema, table and column names independently for all road database queries.
+func roadSourceRelation(table config.TableConfig) (name, geometry, primaryKey string, err error) {
 	if table.Name == "" {
-		return "", nil, fmt.Errorf("road table name is empty")
+		return "", "", "", fmt.Errorf("road table name is empty")
 	}
 	if strings.Contains(table.Name, ".") {
 		parts := strings.Split(table.Name, ".")
 		if len(parts) != 2 || table.Schema != "" {
-			return "", nil, fmt.Errorf("use separate schema and table name")
+			return "", "", "", fmt.Errorf("use separate schema and table name")
 		}
 		table.Schema, table.Name = parts[0], parts[1]
 	}
-	name := quoteIdentifier(table.Name)
+	name = quoteIdentifier(table.Name)
 	if table.Schema != "" {
 		name = quoteIdentifier(table.Schema) + "." + name
 	}
-	geom := table.GeometryField
-	if geom == "" {
-		geom = "geom"
+	geometry, primaryKey = table.GeometryField, table.PrimaryKey
+	if geometry == "" {
+		geometry = "geom"
 	}
-	pk := table.PrimaryKey
-	if pk == "" {
-		pk = "id"
+	if primaryKey == "" {
+		primaryKey = "id"
 	}
-	query := fmt.Sprintf(`SELECT ST_AsGeoJSON(ST_Transform(t.%s,4326)) AS geometry, (to_jsonb(t)-?)::text AS properties FROM %s AS t WHERE t.%s IS NOT NULL`, quoteIdentifier(geom), name, quoteIdentifier(geom))
-	args := []any{geom}
-	if options != nil && options.FilterField != "" {
+	return
+}
+
+// Use identical business category selection for refinement and mesh generation.
+func roadSourceFilter(options *config.GeneratedRoadConfig) (string, []any, error) {
+	predicate := ""
+	args := []any{}
+	if options == nil {
+		return predicate, args, nil
+	}
+	if options.FilterField != "" {
 		if len(options.FilterValues) == 0 {
 			return "", nil, fmt.Errorf("road filterField requires filterValues")
 		}
-		query += " AND t." + quoteIdentifier(options.FilterField) + "::text IN ?"
+		predicate += " AND t." + quoteIdentifier(options.FilterField) + "::text IN ?"
 		args = append(args, options.FilterValues)
-	} else if options != nil && len(options.FilterValues) > 0 {
+	} else if len(options.FilterValues) > 0 {
 		return "", nil, fmt.Errorf("road filterValues require filterField")
 	}
-	query += " ORDER BY t." + quoteIdentifier(pk)
-	return query, args, nil
+	if len(options.WaveSubtypeMapping) > 0 {
+		if options.WaveSubtypeField == "" {
+			return "", nil, fmt.Errorf("waveSubtypeMapping requires waveSubtypeField")
+		}
+		keys := make([]string, 0, len(options.WaveSubtypeMapping))
+		for key := range options.WaveSubtypeMapping {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		predicate += " AND t." + quoteIdentifier(options.WaveSubtypeField) + "::text IN ?"
+		args = append(args, keys)
+	}
+	return predicate, args, nil
+}
+
+// Bind category values rather than allowing raw source SQL in configuration.
+func roadFeatureQuery(table config.TableConfig, options *config.GeneratedRoadConfig) (string, []any, error) {
+	name, geometry, pk, err := roadSourceRelation(table)
+	if err != nil {
+		return "", nil, err
+	}
+	filter, filterArgs, err := roadSourceFilter(options)
+	if err != nil {
+		return "", nil, err
+	}
+	query := fmt.Sprintf(`SELECT ST_AsGeoJSON(ST_Transform(t.%s,4326)) AS geometry, (to_jsonb(t)-?)::text AS properties FROM %s AS t WHERE t.%s IS NOT NULL`, quoteIdentifier(geometry), name, quoteIdentifier(geometry))
+	query += filter + " ORDER BY t." + quoteIdentifier(pk)
+	return query, append([]any{geometry}, filterArgs...), nil
 }
 
 // Read one row at a time; preserve Z, all business properties and 64-bit IDs.
@@ -255,45 +324,26 @@ func readRoadFeatureCollection(ctx context.Context, db *gorm.DB, table config.Ta
 	return fc, rows.Err()
 }
 
-// Attach external road roots in world space while leaving their ENU transforms inside.
-// Run after the static hierarchy is split; never pass these nodes to the old GLB merger.
-func attachGeneratedRoadModels(tileset *Tileset, outputs []GeneratedRoadOutput) error {
-	if len(outputs) == 0 {
-		return nil
-	}
-	if tileset == nil || tileset.Root == nil {
-		return fmt.Errorf("cannot attach generated roads to a nil root")
-	}
-	root := tileset.Root
-	if root.Transform != nil {
-		return fmt.Errorf("generated road attachment requires a world-space parent root")
-	}
-	boxes := []cesium.Box12{}
-	if len(root.Children) > 0 || root.Content != nil {
-		boxes = append(boxes, cesium.Box12(root.BoundingVolume.Box))
-	}
-	for _, output := range outputs {
-		root.Children = append(root.Children, &TileNode{BoundingVolume: BoundingVolume{Box: output.WorldBox}, Content: &TileContent{Uri: output.TilesetURI}, Refine: "ADD", GeometricError: output.GeometricError, Geohash: "generated#" + output.Table})
-		boxes = append(boxes, cesium.Box12(output.WorldBox))
-		if root.GeometricError < output.GeometricError {
-			root.GeometricError = output.GeometricError
-		}
-	}
-	root.BoundingVolume.Box = [12]float64(cesium.MergeBoxes(boxes, 1.05))
-	tileset.GeometricError = root.GeometricError
-	return nil
-}
-
-// Touch every referenced generated resource indirectly by rebuilding on incremental updates.
-// Post sampling is chain-wide, so changing one endpoint can move downstream stations.
+// Re-refine before a complete road export because upstream edits can alter a chain.
 func regenerateRoadAwareTileset(configName, partitionTable, folder string, table GeoTable) (bool, error) {
-	_, sources, err := splitRoadModelSources(table)
+	sources, err := roadModelSources(table)
 	if err != nil {
 		return false, err
 	}
 	if len(sources) == 0 {
 		return false, nil
 	}
-	_, err = GenerateAllGeoHashTile(configName, partitionTable, folder, config.Instance().Bound)
+	dbc := pg.GetConn(configName)
+	if dbc == nil {
+		return true, fmt.Errorf("road generation database connection is empty")
+	}
+	bound := config.Instance().Bound
+	if err = InitTileSetTables(dbc.DB, bound); err != nil {
+		return true, err
+	}
+	if err = RefineUntilStable(dbc.DB, bound, folder); err != nil {
+		return true, err
+	}
+	_, err = GenerateAllGeoHashTile(configName, partitionTable, folder, bound)
 	return true, err
 }

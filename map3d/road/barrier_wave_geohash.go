@@ -16,14 +16,21 @@ import (
 	"github.com/qmuntal/gltf/modeler"
 )
 
-// Fixed-precision, shared-frame slicing options.
+// Configure adaptive leaves or standalone fixed-precision slices in a shared frame.
 // Features must have WGS84 LineString/MultiLineString geometry. OutputDir is the
-// final tileset directory. Source supports are sampled once, then assigned to
+// output directory. Source supports are sampled once, then assigned to
 // exactly one projected cell by anchor; their intact geometry may cross an edge.
-// This prototype has no LOD, per-tile rebasing or stale-output cleanup.
+// ModelsOnly writes GLBs without a tileset; there is no LOD or per-tile rebasing.
 type BarrierWaveGeohashOptions struct {
-	OutputDir string
-	Precision int
+	// Select intersecting original features without clipping their geometry.
+	IntersectBound *[4]float64
+
+	// Explicit database leaves override fixed precision; nil retains standalone slicing.
+	Geohashes []string
+	// Emit only leaf GLBs for a caller-owned tileset hierarchy.
+	ModelsOnly bool
+	OutputDir  string
+	Precision  int
 	// Posts supplies global post defaults; a feature-level pointer takes precedence.
 	Posts common.GuardrailPostOptions
 	// Chains configures full-source endpoint connectivity; zero uses safe defaults.
@@ -52,7 +59,7 @@ func BuildBarrierWaveGeohashSlices(features []LineFeature, opt BarrierWaveGeohas
 	if opt.Precision == 0 {
 		opt.Precision = 6
 	}
-	if opt.Precision < 4 || opt.Precision > 7 || opt.OutputDir == "" {
+	if (opt.Geohashes == nil && (opt.Precision < 4 || opt.Precision > 7)) || opt.OutputDir == "" {
 		return nil, fmt.Errorf("require output directory and precision 4..7")
 	}
 	if len(features) == 0 {
@@ -83,6 +90,18 @@ func BuildBarrierWaveGeohashSlices(features []LineFeature, opt BarrierWaveGeohas
 		features, err = common.PrepareSidewallChains(features, coordinates, opt.Chains)
 		if err != nil {
 			return nil, err
+		}
+	}
+	if opt.IntersectBound != nil {
+		selected := []LineFeature{}
+		for _, f := range features {
+			if roadGeometryIntersectsBound(f.Geom, *opt.IntersectBound) {
+				selected = append(selected, f)
+			}
+		}
+		features = selected
+		if len(features) == 0 && opt.ModelsOnly {
+			return &BarrierWaveGeohashResult{}, nil
 		}
 	}
 	if opt.Bound != nil {
@@ -144,7 +163,11 @@ func BuildBarrierWaveGeohashSlices(features []LineFeature, opt BarrierWaveGeohas
 		return nil, err
 	}
 	cells := []waveSliceCell{}
-	for _, hash := range roadSliceGeohashes(ctx.Region, opt.Precision) {
+	hashes, err := roadSliceTargetGeohashes(ctx.Region, opt.Precision, opt.Geohashes)
+	if err != nil {
+		return nil, err
+	}
+	for _, hash := range hashes {
 		cells = append(cells, waveSliceCell{hash, roadSliceProjectedBoundary(frame, geohash.BoundingBox(hash), ctx.BasePoint[2])})
 	}
 	// Compute ownership once; do not rescan every cell for every source instance
@@ -161,7 +184,7 @@ func BuildBarrierWaveGeohashSlices(features []LineFeature, opt BarrierWaveGeohas
 		owners[nodeIndex] = make([]int, len(translations))
 		for i, p := range translations {
 			owners[nodeIndex][i] = waveCellOwner(p, cells)
-			if owners[nodeIndex][i] < 0 {
+			if owners[nodeIndex][i] < 0 && opt.Geohashes == nil {
 				return nil, fmt.Errorf("support anchor outside projected cells: %v", p)
 			}
 		}
@@ -304,17 +327,23 @@ func BuildBarrierWaveGeohashSlices(features []LineFeature, opt BarrierWaveGeohas
 		for _, m := range doc.Meshes {
 			count += len(m.Primitives)
 		}
-		result.Tiles = append(result.Tiles, RoadSurfaceGeohashTile{Geohash: cell.hash, GLBPath: path, PrimitiveCount: count, GLBBytes: len(glb)})
+		tile := RoadSurfaceGeohashTile{Geohash: cell.hash, GLBPath: path, PrimitiveCount: count, GLBBytes: len(glb)}
+		copy(tile.Box[:], box)
+		copy(tile.Transform[:], root.Root.Transform)
+		result.Tiles = append(result.Tiles, tile)
 		root.Root.Children = append(root.Root.Children, tilesetRoot{BoundingVolume: tilesetBoundingVolume{Box: box}, Refine: "ADD", Content: &tilesetContent{URI: "tiles/" + cell.hash + "/barrier.glb"}})
 	}
-	if len(result.Tiles) == 0 {
+	if len(result.Tiles) == 0 && !opt.ModelsOnly {
 		return nil, fmt.Errorf("no nonempty barrier tiles")
 	}
-	if result.SourceInstances != result.SlicedInstances {
+	if opt.Geohashes == nil && result.SourceInstances != result.SlicedInstances {
 		return nil, fmt.Errorf("support instance count changed: %d -> %d", result.SourceInstances, result.SlicedInstances)
 	}
-	if result.SourceArea <= 0 || math.Abs(result.SourceArea-result.SlicedArea)/result.SourceArea > 1e-5 {
+	if result.SourceArea <= 0 || (opt.Geohashes == nil && math.Abs(result.SourceArea-result.SlicedArea)/result.SourceArea > 1e-5) {
 		return nil, fmt.Errorf("rail area changed: %f -> %f", result.SourceArea, result.SlicedArea)
+	}
+	if opt.ModelsOnly {
+		return result, nil
 	}
 	box := make([]float64, 12)
 	for axis := 0; axis < 3; axis++ {

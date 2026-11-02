@@ -20,11 +20,18 @@ import (
 	"github.com/twpayne/go-geom/encoding/geojson"
 )
 
-// RoadSurfaceGeohashOptions configures fixed-precision slicing in one shared frame.
+// Configure explicit database leaves or standalone fixed-precision slicing in one frame.
 // OutputDir is the tileset directory itself. Precision zero defaults to six.
 // Bound keeps complete WGS84 features; crossing features are excluded.
 // BuildOptions defaults to DefaultBuildOptions; input centerlines are enabled.
 type RoadSurfaceGeohashOptions struct {
+	// Select intersecting original features without clipping their geometry.
+	IntersectBound *[4]float64
+
+	// Explicit database leaves override fixed precision; nil retains standalone slicing.
+	Geohashes []string
+	// Emit only leaf GLBs for a caller-owned tileset hierarchy.
+	ModelsOnly   bool
 	OutputDir    string
 	Precision    int
 	Bound        string
@@ -37,6 +44,9 @@ type RoadSurfaceGeohashTile struct {
 	GLBPath        string
 	PrimitiveCount int
 	GLBBytes       int
+	// Bounds are local to Transform; callers aggregate their world-space equivalents.
+	Box       [12]float64
+	Transform [16]float64
 }
 
 type RoadSurfaceGeohashResult struct {
@@ -47,18 +57,18 @@ type RoadSurfaceGeohashResult struct {
 	SplitRoad                  bool
 }
 
-// BuildRoadSurfaceGeohashSlices triangulates original polygons once, clips their
+// Triangulate original polygons once, clip their
 // meshes into projected geohash cells, and writes GLBs plus a root tileset.
 // Inputs are WGS84 GeoJSON collections and are not mutated. No environment
 // variables, test fixtures or testing.T are required. Existing output files are
 // not removed; use a fresh directory when changing inputs or precision.
-// This remains a fixed-precision prototype, without LOD or per-tile rebasing.
+// Explicit leaves support adaptive depth; ModelsOnly leaves hierarchy ownership to the caller.
 func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection, opt RoadSurfaceGeohashOptions) (*RoadSurfaceGeohashResult, error) {
 	precision := opt.Precision
 	if precision == 0 {
 		precision = 6
 	}
-	if precision < 4 || precision > 7 {
+	if opt.Geohashes == nil && (precision < 4 || precision > 7) {
 		return nil, fmt.Errorf("precision must be 4..7")
 	}
 	if opt.OutputDir == "" {
@@ -78,7 +88,20 @@ func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection
 		roads = FilterRoadSurfaceInputBound(roads, bound)
 		centerlines = FilterRoadSurfaceInputBound(centerlines, bound)
 	}
+	if opt.IntersectBound != nil {
+		selected := *roads
+		selected.Features = nil
+		for _, f := range roads.Features {
+			if f != nil && roadGeometryIntersectsBound(f.Geometry, *opt.IntersectBound) {
+				selected.Features = append(selected.Features, f)
+			}
+		}
+		roads = &selected
+	}
 	if len(roads.Features) == 0 {
+		if opt.ModelsOnly {
+			return &RoadSurfaceGeohashResult{}, nil
+		}
 		return nil, fmt.Errorf("no complete road surface features")
 	}
 	result := &RoadSurfaceGeohashResult{}
@@ -127,7 +150,10 @@ func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection
 	if originalArea <= 0 {
 		return nil, fmt.Errorf("source road mesh is empty")
 	}
-	hashes := roadSliceGeohashes(region, precision)
+	hashes, err := roadSliceTargetGeohashes(region, precision, opt.Geohashes)
+	if err != nil {
+		return nil, err
+	}
 	frame, err := aabb.NewENUFrame(base[0], base[1], base[2])
 	if err != nil {
 		return nil, fmt.Errorf("road surface geohash slices: %w", err)
@@ -240,14 +266,22 @@ func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection
 		}
 		haveBounds = true
 		tileCount++
-		result.Tiles = append(result.Tiles, RoadSurfaceGeohashTile{Geohash: hash, GLBPath: glbPath, PrimitiveCount: len(primitives), GLBBytes: buffer.Len()})
+		tile := RoadSurfaceGeohashTile{Geohash: hash, GLBPath: glbPath, PrimitiveCount: len(primitives), GLBBytes: buffer.Len()}
+		copy(tile.Box[:], b)
+		copy(tile.Transform[:], root.Root.Transform)
+		result.Tiles = append(result.Tiles, tile)
 	}
-	if tileCount == 0 {
+	if tileCount == 0 && !opt.ModelsOnly {
 		return nil, fmt.Errorf("no nonempty road surface tiles generated")
 	}
 	// The projected cells must partition the source mesh without area loss/overlap.
-	if math.Abs(clippedArea-originalArea)/originalArea > 1e-5 {
+	if opt.Geohashes == nil && math.Abs(clippedArea-originalArea)/originalArea > 1e-5 {
 		return nil, fmt.Errorf("area mismatch: source=%f sliced=%f", originalArea, clippedArea)
+	}
+	result.RoadCount, result.CenterlineCount = len(roads.Features), len(centerlines.Features)
+	result.SourceArea, result.SlicedArea, result.SplitRoad = originalArea, clippedArea, splitRoad
+	if opt.ModelsOnly {
+		return result, nil
 	}
 	b := make([]float64, 12)
 	for i := 0; i < 3; i++ {

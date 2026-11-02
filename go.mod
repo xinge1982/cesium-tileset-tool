@@ -3,6 +3,7 @@ module cesium-tileset-tool
 go 1.26.0
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/ByteArena/poly2tri-go v0.0.0-20170716161910-d102ad91854f
 	github.com/deckarep/golang-set v1.8.0
 	github.com/ebitengine/purego v0.10.0

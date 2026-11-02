@@ -120,7 +120,8 @@ type TilesetSourceLODConfig struct {
 
 // Configure geometry generated during tileset export; existing sources need no changes.
 type GeneratedRoadConfig struct {
-	BuildType          string                  `yaml:"buildType" json:"buildType"`
+	BuildType string `yaml:"buildType" json:"buildType"`
+	// Retained for config compatibility; export depth comes from database partitions.
 	Precision          int                     `yaml:"precision" json:"precision"`
 	TexturePath        string                  `yaml:"texturePath" json:"texturePath"`
 	CenterlineTable    *TableConfig            `yaml:"centerlineTable" json:"centerlineTable"`
