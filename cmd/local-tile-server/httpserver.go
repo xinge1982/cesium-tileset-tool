@@ -2,11 +2,9 @@ package main
 
 import (
 	"bytes"
+	"cesium-tileset-tool/config"
 	"fmt"
 	"io/fs"
-	"map-tool/config"
-	_ "map-tool/docs"
-	"map-tool/httpserver/ginprometheus"
 	"net/http"
 	"strings"
 	"time"
@@ -16,8 +14,6 @@ import (
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 var TempFilePath = "./tmp"
@@ -69,15 +65,8 @@ func StartHttp() error {
 		}),
 	))
 
-	//metrics
-	p := ginprometheus.NewPrometheus("gin", []string{})
-	p.Use(r, "/actuator/prometheus")
-
 	//// 注册中间件，应用到所有路由
 	r.Use(requestLoggerMiddleware())
-
-	// 注册 Swagger 路由
-	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	//pprof debug information
 	pprof.Register(r, "/debug/pprof")

@@ -753,7 +753,8 @@ def main() -> int:
             try:
                 height = float((row.get(args.height_field) or "").strip())
                 if not math.isfinite(height) or height <= 0:
-                    raise ValueError(f"invalid height {row.get(args.height_field)!r}")
+                    print(f"SKIP row {row_number}: invalid height {row.get(args.height_field)!r}")
+                    continue
                 storeys = parse_storeys(row.get(args.storey_field))
                 points = parse_polygon_z(row.get(args.geometry_field) or "")
                 footprint, longitude, latitude = local_footprint(points)

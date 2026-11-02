@@ -2,9 +2,9 @@ package main
 
 import (
 	"bufio"
+	"cesium-tileset-tool/config"
 	"compress/gzip"
 	"io"
-	"map-tool/config"
 	"mime"
 	"net/http"
 	"os"

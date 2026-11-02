@@ -146,6 +146,7 @@ type DefaultView struct {
 }
 
 type Config struct {
+	ManHttpPort     string                   //服务端口
 	ManHttpsPort    string                   //服务端口
 	Name            string                   //配置名称
 	Desc            string                   //配置描述
@@ -401,6 +402,7 @@ func viperConfig() *Config {
 	name := getConfigName(fileName)
 	cfg.Name = name
 
+	yaml.SetDefault("ManHttpPort", "48090")
 	yaml.SetDefault("ManHttpsPort", "48091")
 	yaml.SetDefault("NetworkFolder", "network")
 	yaml.SetDefault("LocalTileFolder", "data")
@@ -473,6 +475,12 @@ func viperConfig() *Config {
 		cfg.UsingSSL = true
 		cfg.SSLSecCrt = filepath.Join(cfg.CertFilePath, "server.pem")
 		cfg.SSLSecKey = filepath.Join(cfg.CertFilePath, "server.key")
+	}
+
+	localTileFolder := os.Getenv("LOCAL_TILE_FOLDER")
+	if len(localTileFolder) > 0 {
+		cfg.LocalTileFolder = localTileFolder
+		fmt.Println("Environment LOCAL_TILE_FOLDER:" + localTileFolder)
 	}
 
 	return &cfg

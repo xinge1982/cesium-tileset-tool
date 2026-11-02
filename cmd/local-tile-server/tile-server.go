@@ -2,11 +2,10 @@ package main
 
 import (
 	"bytes"
+	"cesium-tileset-tool/config"
 	"embed"
 	"flag"
 	"fmt"
-	"map-tool/config"
-	"map-tool/tileserver"
 	"os"
 	"os/signal"
 	"strings"
@@ -181,7 +180,6 @@ OUTLOOP:
 		select {
 		case s := <-sigc:
 			log.Info("signal received:" + s.String())
-			tileserver.Close()
 			break OUTLOOP
 		case <-ticker.C:
 		}

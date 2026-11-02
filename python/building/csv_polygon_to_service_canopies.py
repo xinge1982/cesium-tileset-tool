@@ -26,7 +26,6 @@ import argparse
 import csv
 import json
 import math
-import statistics
 import struct
 import sys
 from pathlib import Path
@@ -244,33 +243,99 @@ def strip_surface_mesh(
     require_strong_caps: bool,
 ) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]] | None:
     """Reconstruct a curved canopy between two sampled longitudinal edges."""
+    if cross_segments < 1:
+        raise ValueError("cross_segments must be positive")
     count = len(boundary)
+    if count < 4:
+        return None
+
     edge_lengths = [
         horizontal_distance(boundary[index], boundary[(index + 1) % count])
         for index in range(count)
     ]
-    median_length = statistics.median(length for length in edge_lengths if length > 1e-6)
-    candidates: list[tuple[float, int, int]] = []
-    for first in range(count):
-        for second in range(first + 1, count):
-            if (first + 1) % count == second or (second + 1) % count == first:
-                continue
-            candidates.append((edge_lengths[first] + edge_lengths[second], first, second))
-    if not candidates:
-        return None
-    _, first_cap, second_cap = max(candidates)
-    if require_strong_caps and min(
-        edge_lengths[first_cap], edge_lengths[second_cap]
-    ) < median_length * 1.5:
+    perimeter = sum(edge_lengths)
+    if min(edge_lengths) <= 1e-6:
         return None
 
-    # The cap edges split the polygon ring into its two longitudinal sides.
-    first_chain = boundary[first_cap + 1:second_cap + 1]
-    second_chain = list(reversed(
-        boundary[second_cap + 1:] + boundary[:first_cap + 1]
-    ))
-    if len(first_chain) < 2 or len(second_chain) < 2:
+    # Estimate the horizontal principal axis by integrating over the perimeter.
+    # Vertex PCA is biased by sampling density; choosing the two longest edges
+    # mistakes a sparsely sampled longitudinal segment for an end cap.
+    origin = boundary[0]
+    xy = [(point[0] - origin[0], point[1] - origin[1]) for point in boundary]
+    mean_x = mean_y = xx = yy = xy_moment = 0.0
+    for index, (ax, ay) in enumerate(xy):
+        bx, by = xy[(index + 1) % count]
+        weight = edge_lengths[index] / perimeter
+        mean_x += weight * (ax + bx) / 2
+        mean_y += weight * (ay + by) / 2
+        xx += weight * (ax * ax + ax * bx + bx * bx) / 3
+        yy += weight * (ay * ay + ay * by + by * by) / 3
+        xy_moment += weight * (2 * ax * ay + ax * by + bx * ay + 2 * bx * by) / 6
+    xx -= mean_x * mean_x
+    yy -= mean_y * mean_y
+    xy_moment -= mean_x * mean_y
+    angle = 0.5 * math.atan2(2 * xy_moment, xx - yy)
+    axis = (math.cos(angle), math.sin(angle))
+    stations = [x * axis[0] + y * axis[1] for x, y in xy]
+    low, high = min(stations), max(stations)
+    span = high - low
+    if span <= 1e-6:
         return None
+    tolerance = max(1e-6, span * 1e-8)
+
+    low_caps: list[int] = []
+    high_caps: list[int] = []
+    for index, length in enumerate(edge_lengths):
+        following = (index + 1) % count
+        # End caps are transverse and lie at opposite longitudinal extremes.
+        if abs(stations[following] - stations[index]) > 0.65 * length:
+            continue
+        middle = (stations[index] + stations[following]) / 2
+        if middle <= low + span * 0.2:
+            low_caps.append(index)
+        if middle >= high - span * 0.2:
+            high_caps.append(index)
+
+    candidates = []
+    for low_cap in low_caps:
+        for high_cap in high_caps:
+            first_cap, second_cap = sorted((low_cap, high_cap))
+            if second_cap == first_cap + 1 or (second_cap + 1) % count == first_cap:
+                continue
+            first_indices = list(range(first_cap + 1, second_cap + 1))
+            second_indices = list(reversed(
+                list(range(second_cap + 1, count)) + list(range(first_cap + 1))
+            ))
+            if min(len(first_indices), len(second_indices)) < 2:
+                continue
+            # Both sides must advance in the same direction without doubling
+            # back. This also rejects a cap selected from one of the long sides.
+            direction = 1 if stations[first_indices[-1]] > stations[first_indices[0]] else -1
+            if any(
+                direction * (stations[b] - stations[a]) <= tolerance
+                for chain in (first_indices, second_indices)
+                for a, b in zip(chain, chain[1:])
+            ):
+                continue
+            cap_width = (edge_lengths[first_cap] + edge_lengths[second_cap]) / 2
+            separation = abs(
+                (stations[low_cap] + stations[(low_cap + 1) % count]) / 2
+                - (stations[high_cap] + stations[(high_cap + 1) % count]) / 2
+            )
+            if require_strong_caps and separation < cap_width * 1.25:
+                continue
+            # Prefer transverse caps closest to the opposite ends, independently
+            # of the number or spacing of samples on either longitudinal side.
+            score = separation / span - (
+                abs(stations[(first_cap + 1) % count] - stations[first_cap])
+                + abs(stations[(second_cap + 1) % count] - stations[second_cap])
+            ) / span
+            candidates.append((score, first_indices, second_indices))
+    if not candidates:
+        return None
+    _, first_indices, second_indices = max(candidates, key=lambda item: item[0])
+    first_chain = [boundary[index] for index in first_indices]
+    second_chain = [boundary[index] for index in second_indices]
 
     def normalized_parameters(chain: list[tuple[float, float, float]]) -> list[float]:
         values = [0.0]
@@ -280,11 +345,18 @@ def strip_surface_mesh(
             return []
         return [value / values[-1] for value in values]
 
-    fractions = sorted(set(
+    parameters = sorted(
         normalized_parameters(first_chain) + normalized_parameters(second_chain)
-    ))
+    )
+    fractions: list[float] = []
+    for value in parameters:
+        # Equivalent stations on the two sides may differ by floating-point
+        # roundoff. Do not create a near-zero-width row between them.
+        if not fractions or value - fractions[-1] > 1e-12:
+            fractions.append(value)
     if len(fractions) < 2:
         return None
+    fractions[-1] = 1.0
     first_side = resample_chain(first_chain, fractions)
     second_side = resample_chain(second_chain, fractions)
 
@@ -300,18 +372,25 @@ def strip_surface_mesh(
     row_width = cross_segments + 1
     triangles: list[tuple[int, int, int]] = []
 
-    def append_upward(a: int, b: int, c: int) -> None:
-        pa, pb, pc = positions[a], positions[b], positions[c]
-        area = ((pb[0] - pa[0]) * (pc[1] - pa[1])
-                - (pb[1] - pa[1]) * (pc[0] - pa[0]))
-        triangles.append((a, b, c) if area >= 0 else (a, c, b))
-
+    orientation = 0
+    projected_area = 0.0
     for row in range(len(fractions) - 1):
         for column in range(cross_segments):
             a = row * row_width + column
             b, c, d = a + 1, a + row_width + 1, a + row_width
-            append_upward(a, b, c)
-            append_upward(a, c, d)
+            for ia, ib, ic in ((a, b, c), (a, c, d)):
+                pa, pb, pc = positions[ia], positions[ib], positions[ic]
+                area = ((pb[0] - pa[0]) * (pc[1] - pa[1])
+                        - (pb[1] - pa[1]) * (pc[0] - pa[0]))
+                sign = 1 if area > 0 else -1
+                if abs(area) <= 1e-12 or (orientation and sign != orientation):
+                    return None
+                orientation = sign
+                projected_area += abs(area) / 2
+                triangles.append((ia, ib, ic) if sign > 0 else (ia, ic, ib))
+    source_area = abs(signed_area([(p[0], p[1]) for p in boundary]))
+    if abs(projected_area - source_area) > max(1e-6, source_area * 1e-7):
+        return None
     return positions, triangles
 
 
@@ -427,6 +506,8 @@ def create_canopy_glb(
         reconstructed = strip_surface_mesh(
             top_enu, cross_segments, require_strong_caps=surface_mode == "auto",
         )
+    if reconstructed is None and surface_mode == "strip":
+        raise ValueError("cannot reconstruct a non-folding strip from this boundary")
     if reconstructed is None:
         surface_top = top_enu
         triangles = triangulate(footprint)

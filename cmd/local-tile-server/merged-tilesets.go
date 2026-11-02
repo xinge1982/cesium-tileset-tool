@@ -1,9 +1,9 @@
 package main
 
 import (
+	"cesium-tileset-tool/config"
 	"encoding/json"
 	"fmt"
-	"map-tool/config"
 	"math"
 	"os"
 	"path/filepath"
