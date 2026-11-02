@@ -296,6 +296,14 @@ func InitTileSetTables(db *gorm.DB, boundStr string) error {
 		return err
 	}
 	for _, table := range AllTiles {
+		existing, _, sourceErr := splitRoadModelSources(table)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		table = existing
+		if len(table.GeoTableNames) == 0 {
+			continue
+		}
 		hasTable := db.Migrator().HasTable(table.PartitionTableName)
 		if !hasTable {
 			if err := db.Table(table.PartitionTableName).AutoMigrate(&TileSetPartition{}); err != nil {
@@ -324,6 +332,14 @@ func RemoveExpired(db *gorm.DB, expire time.Time, boundStr string) error {
 		return err
 	}
 	for _, table := range AllTiles {
+		existing, _, sourceErr := splitRoadModelSources(table)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		table = existing
+		if len(table.GeoTableNames) == 0 {
+			continue
+		}
 		log.Infof("begin remove expired tileset table: %+v", table)
 
 		if err := db.Table(table.PartitionTableName).
@@ -378,6 +394,14 @@ func RefineUntilStable(db *gorm.DB, boundStr string, outputDirectory string) (re
 		return err
 	}
 	for _, table := range AllTiles {
+		existing, _, sourceErr := splitRoadModelSources(table)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		table = existing
+		if len(table.GeoTableNames) == 0 {
+			continue
+		}
 		tableStartedAt := time.Now()
 		tableStats := refinementTableStats{
 			PartitionTable: table.PartitionTableName,
