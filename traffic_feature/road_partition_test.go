@@ -11,6 +11,7 @@ import (
 	"cesium-tileset-tool/config"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/mmcloughlin/geohash"
+	"github.com/qmuntal/gltf"
 	"github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/encoding/geojson"
 	"gorm.io/driver/postgres"
@@ -136,6 +137,9 @@ func testGenerateAllRoadLODExport(t *testing.T, lod config.TilesetLODConfig) {
 	previous := AllTiles
 	table := roadTestTable()
 	table.LOD = lod
+	roadConfig := table.TilesetSources["surfaces"].Road
+	roadConfig.Materials = map[string]config.GeneratedRoadMaterialConfig{"top": {TexturePath: "not-selected.png"}}
+	roadConfig.MaterialOverrides = map[string]map[string]config.GeneratedRoadMaterialConfig{"road_surface": {"top": {Color: "#00FF00"}}}
 	// Even a configured split level must not create source or hierarchy sub-tilesets.
 	table.TilesetSplitLevel = 4
 	AllTiles = []GeoTable{table}
@@ -193,6 +197,21 @@ func testGenerateAllRoadLODExport(t *testing.T, lod config.TilesetLODConfig) {
 			data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(node.Content.Uri)))
 			if err != nil || !bytes.Contains(data, []byte("9007199254740993")) {
 				t.Fatal("database feature ID lost precision", err)
+			}
+			doc, err := gltf.Open(filepath.Join(dir, filepath.FromSlash(node.Content.Uri)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, mesh := range doc.Meshes {
+				for _, primitive := range mesh.Primitives {
+					if primitive.Material == nil {
+						t.Fatal("missing surface material")
+					}
+					pbr := doc.Materials[*primitive.Material].PBRMetallicRoughness
+					if pbr == nil || pbr.BaseColorFactor == nil || *pbr.BaseColorFactor != [4]float64{0, 1, 0, 1} {
+						t.Fatal("source material override did not reach generated GLB", pbr)
+					}
+				}
 			}
 			uniqueModels[node.Content.Uri] = true
 			models++

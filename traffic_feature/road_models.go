@@ -47,6 +47,10 @@ func ResolveModelSource(source config.TilesetSourceConfig) (string, error) {
 		default:
 			return "", fmt.Errorf("unsupported road buildType %q", source.Road.BuildType)
 		}
+		materials, overrides := roadMaterialOptionsFromConfig(source.Road)
+		if err := road.ValidateRoadMaterials(road.BuildType(source.Road.BuildType), materials, overrides); err != nil {
+			return "", fmt.Errorf("source %s: %w", source.ID, err)
+		}
 	default:
 		return "", fmt.Errorf("unsupported modelSource %q", mode)
 	}
@@ -169,9 +173,10 @@ func generateRoadSourceModels(ctx context.Context, table GeoTable, leaves []*Geo
 			}
 		}
 		p := options.Posts
+		materials, overrides := roadMaterialOptionsFromConfig(options)
 		result, err := road.BuildRoadModelSlices(ctx, road.RoadModelInput{Features: collection, Centerlines: centerlines}, road.RoadModelOptions{
 			BuildType: road.BuildType(options.BuildType), OutputDir: filepath.Join(runDir, fmt.Sprintf("source-%d", i)),
-			Geohashes: hashes, ModelsOnly: true, IntersectBound: &bounds, TexturePath: options.TexturePath,
+			Geohashes: hashes, ModelsOnly: true, IntersectBound: &bounds, TexturePath: options.TexturePath, Materials: materials, MaterialOverrides: overrides,
 			WaveSubtype: options.WaveSubtype, WaveSubtypeField: options.WaveSubtypeField, WaveSubtypeMapping: options.WaveSubtypeMapping,
 			Posts: roadcommon.GuardrailPostOptions{Diameter: p.Diameter, TopAboveBoardCenter: p.TopAboveBoardCenter, Height: p.Height, Spacing: p.Spacing, LateralOffset: p.LateralOffset, RadialSegments: p.RadialSegments},
 		})
@@ -351,4 +356,27 @@ func regenerateRoadAwareTileset(configName, partitionTable, folder string, table
 	}
 	_, err = GenerateAllGeoHashTile(configName, partitionTable, folder, bound)
 	return true, err
+}
+
+// Convert configuration maps without coupling the config package to the road generator.
+func roadMaterialOptionsFromConfig(options *config.GeneratedRoadConfig) (map[string]road.RoadMaterialOptions, map[string]map[string]road.RoadMaterialOptions) {
+	convert := func(input map[string]config.GeneratedRoadMaterialConfig) map[string]road.RoadMaterialOptions {
+		if input == nil {
+			return nil
+		}
+		result := make(map[string]road.RoadMaterialOptions, len(input))
+		for part, value := range input {
+			result[part] = road.RoadMaterialOptions{TexturePath: value.TexturePath, Color: value.Color}
+		}
+		return result
+	}
+	defaults := convert(options.Materials)
+	var overrides map[string]map[string]road.RoadMaterialOptions
+	if options.MaterialOverrides != nil {
+		overrides = make(map[string]map[string]road.RoadMaterialOptions, len(options.MaterialOverrides))
+		for subtype, values := range options.MaterialOverrides {
+			overrides[subtype] = convert(values)
+		}
+	}
+	return defaults, overrides
 }

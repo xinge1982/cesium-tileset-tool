@@ -490,7 +490,9 @@ Tilesets:
         road:
           buildType: road_surface
           precision: 6
-          texturePath: networks/texture/road/lm.jpeg
+          materials:
+            top:
+              texturePath: networks/texture/road/lm.jpeg
           centerlineTable:
             name: hdroad
             primaryKey: hroad_id

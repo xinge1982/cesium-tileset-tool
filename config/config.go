@@ -122,15 +122,23 @@ type TilesetSourceLODConfig struct {
 type GeneratedRoadConfig struct {
 	BuildType string `yaml:"buildType" json:"buildType"`
 	// Retained for config compatibility; export depth comes from database partitions.
-	Precision          int                     `yaml:"precision" json:"precision"`
-	TexturePath        string                  `yaml:"texturePath" json:"texturePath"`
-	CenterlineTable    *TableConfig            `yaml:"centerlineTable" json:"centerlineTable"`
-	WaveSubtype        string                  `yaml:"waveSubtype" json:"waveSubtype"`
-	WaveSubtypeField   string                  `yaml:"waveSubtypeField" json:"waveSubtypeField"`
-	WaveSubtypeMapping map[string]string       `yaml:"waveSubtypeMapping" json:"waveSubtypeMapping"`
-	FilterField        string                  `yaml:"filterField" json:"filterField"`
-	FilterValues       []string                `yaml:"filterValues" json:"filterValues"`
-	Posts              GeneratedRoadPostConfig `yaml:"posts" json:"posts"`
+	Precision          int                                               `yaml:"precision" json:"precision"`
+	TexturePath        string                                            `yaml:"texturePath" json:"texturePath"`
+	Materials          map[string]GeneratedRoadMaterialConfig            `yaml:"materials,omitempty" json:"materials,omitempty"`
+	MaterialOverrides  map[string]map[string]GeneratedRoadMaterialConfig `yaml:"materialOverrides,omitempty" json:"materialOverrides,omitempty"`
+	CenterlineTable    *TableConfig                                      `yaml:"centerlineTable" json:"centerlineTable"`
+	WaveSubtype        string                                            `yaml:"waveSubtype" json:"waveSubtype"`
+	WaveSubtypeField   string                                            `yaml:"waveSubtypeField" json:"waveSubtypeField"`
+	WaveSubtypeMapping map[string]string                                 `yaml:"waveSubtypeMapping" json:"waveSubtypeMapping"`
+	FilterField        string                                            `yaml:"filterField" json:"filterField"`
+	FilterValues       []string                                          `yaml:"filterValues" json:"filterValues"`
+	Posts              GeneratedRoadPostConfig                           `yaml:"posts" json:"posts"`
+}
+
+// Describe the texture or color used by a named road model part.
+type GeneratedRoadMaterialConfig struct {
+	TexturePath string `yaml:"texturePath,omitempty" json:"texturePath,omitempty"`
+	Color       string `yaml:"color,omitempty" json:"color,omitempty"`
 }
 
 // Configure generated guardrail posts in metres, except radial segment count.

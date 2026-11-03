@@ -31,12 +31,14 @@ type RoadSurfaceGeohashOptions struct {
 	// Explicit database leaves override fixed precision; nil retains standalone slicing.
 	Geohashes []string
 	// Emit only leaf GLBs for a caller-owned tileset hierarchy.
-	ModelsOnly   bool
-	OutputDir    string
-	Precision    int
-	Bound        string
-	TexturePath  string
-	BuildOptions *BuildOptions
+	ModelsOnly        bool
+	OutputDir         string
+	Precision         int
+	Bound             string
+	TexturePath       string
+	Materials         map[string]RoadMaterialOptions
+	MaterialOverrides map[string]map[string]RoadMaterialOptions
+	BuildOptions      *BuildOptions
 }
 
 type RoadSurfaceGeohashTile struct {
@@ -64,6 +66,10 @@ type RoadSurfaceGeohashResult struct {
 // not removed; use a fresh directory when changing inputs or precision.
 // Explicit leaves support adaptive depth; ModelsOnly leaves hierarchy ownership to the caller.
 func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection, opt RoadSurfaceGeohashOptions) (*RoadSurfaceGeohashResult, error) {
+	material, err := ResolveRoadMaterials(BuildTypeRoadSurface, string(BuildTypeRoadSurface), opt.TexturePath, opt.Materials, opt.MaterialOverrides)
+	if err != nil {
+		return nil, err
+	}
 	precision := opt.Precision
 	if precision == 0 {
 		precision = 6
@@ -131,6 +137,7 @@ func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection
 	sourceMeshes := make([][]common.RoadSurfaceMesh, len(features))
 	originalArea := 0.0
 	for i := range features {
+		features[i].Material = material
 		// Keep business fields, including fields beyond id/type.
 		fields := featureFieldsFromGeoJSON(features[i].Fields)
 		fields["type"] = "road_surface"

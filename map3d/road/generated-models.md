@@ -94,6 +94,57 @@ road:
 
 旧版 `road.precision` 保留配置兼容，但不再控制主流程分片；实际深度由数据库细分结果决定。含道路源的增量更新会先重新细分再完整导出，以更新受上游链变化影响的下游模型。
 
+## 按模型部位和子类型匹配贴图
+
+`road.materials` 设置 source 默认材质，`road.materialOverrides` 按已解析的模型子类型覆盖对应部位。每个条目选择 `texturePath` 或 `color`，不能同时配置。空条目继承下一优先级，不修改源属性或原始几何。
+
+| buildType | 可配置部位 | 生成器内部材质槽 |
+| --- | --- | --- |
+| road_surface | top / side / bottom | Top / Side / Bottom |
+| barrier_wave | rail / post | Top / Side |
+
+护栏示例：
+
+```yaml
+road:
+  buildType: barrier_wave
+  waveSubtypeField: feature_type
+  materials:
+    rail:
+      texturePath: networks/texture/road/bxhl_2.png
+    post:
+      color: "#8D949C"
+  materialOverrides:
+    wave_three:
+      rail:
+        texturePath: networks/texture/road/sbb.png
+    wave_nose_end:
+      rail:
+        texturePath: networks/texture/road/bd_01.png
+```
+
+子类型使用 `waveSubtype`、`waveSubtypeField`、`waveSubtypeMapping` 解析后的 `wave_two`、`wave_three`、`wave_nose_end`，不使用数据库的原始分类编码。三波仅覆盖波板时，立柱继续继承 source 的 `post` 设置。立柱也可配置 `texturePath`，保留原有实例化网格和 UV。鼻端生成器目前没有立柱几何，`post` 不会为其额外创建立柱。
+
+道路面示例：
+
+```yaml
+road:
+  buildType: road_surface
+  materials:
+    top:
+      texturePath: networks/texture/road/lm.jpeg
+    side:
+      color: "#888888"
+    bottom:
+      color: "#555555"
+```
+
+道路面还可使用 `materialOverrides.road_surface` 覆盖各部位。当前道路面切片是零厚度网格，实际使用顶面材质；配置 `side`、`bottom` 本身不会增加侧面或底面几何。
+
+每个部位的选择顺序为：**子类型部位 → source 默认部位 → 旧 `texturePath`（适用部位）→ 内置颜色**。覆盖按整个条目选择，设置颜色会替换下层贴图，而不是把两者混在一起。旧 `texturePath` 对道路面仍作用于 top/side/bottom，对护栏仍只作用于 rail；未配置的立柱保持原来的灰色。未知部位、未知覆盖子类型及同时填写纹理与颜色会明确报错，避免配置拼写错误被忽略。贴图相对路径仍相对于程序运行目录，不是 YAML 所在目录。
+
+实际匹配入口为 `road.ResolveRoadMaterials`，由波形护栏的 GeoJSON 转换及道路面切片生成器调用。默认与覆盖材质通过 `RoadModelOptions.Materials`、`MaterialOverrides` 传入；数据库编译适配器负责将配置映射到这两个参数。原有 `TexturePath` 调用方式保持兼容。
+
 ## LOD 与显示距离
 
 `lod.enabled: true` 时，每个生成的道路内容按 LOD0 → LOD1 → LOD2 → LOD3 构造 `REPLACE` 链，节点使用各级配置的 `geometricError`。例如上海配置的 `120 / 35 / 7 / 0` 全部写入最终 JSON。各级误差必须有限、非负、严格递减，LOD3 必须为 0。

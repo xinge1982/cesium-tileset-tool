@@ -33,6 +33,8 @@ type RoadModelOptions struct {
 	ModelsOnly         bool
 	Bound              string
 	TexturePath        string
+	Materials          map[string]RoadMaterialOptions
+	MaterialOverrides  map[string]map[string]RoadMaterialOptions
 	WaveSubtype        string
 	WaveSubtypeField   string
 	WaveSubtypeMapping map[string]string
@@ -71,7 +73,7 @@ func BuildRoadModelSlices(ctx context.Context, input RoadModelInput, opt RoadMod
 		if err := validateRoadModelGeometry(input.Features, true); err != nil {
 			return nil, err
 		}
-		result, err := BuildRoadSurfaceGeohashSlices(input.Features, input.Centerlines, RoadSurfaceGeohashOptions{OutputDir: opt.OutputDir, Precision: opt.Precision, Geohashes: opt.Geohashes, ModelsOnly: opt.ModelsOnly, IntersectBound: opt.IntersectBound, Bound: opt.Bound, TexturePath: opt.TexturePath, BuildOptions: opt.BuildOptions})
+		result, err := BuildRoadSurfaceGeohashSlices(input.Features, input.Centerlines, RoadSurfaceGeohashOptions{OutputDir: opt.OutputDir, Precision: opt.Precision, Geohashes: opt.Geohashes, ModelsOnly: opt.ModelsOnly, IntersectBound: opt.IntersectBound, Bound: opt.Bound, TexturePath: opt.TexturePath, Materials: opt.Materials, MaterialOverrides: opt.MaterialOverrides, BuildOptions: opt.BuildOptions})
 		if err != nil {
 			return nil, err
 		}
@@ -134,6 +136,10 @@ func BuildRoadModelSlices(ctx context.Context, input RoadModelInput, opt RoadMod
 // Convert wave lines outside test code while preserving complete property rows.
 // A subtype mapping deliberately skips unmatched source categories, e.g. other walls.
 func BarrierWaveFeaturesFromGeoJSON(fc *geojson.FeatureCollection, opt RoadModelOptions) ([]LineFeature, error) {
+	if err := ValidateRoadMaterials(BuildTypeBarrierWave, opt.Materials, opt.MaterialOverrides); err != nil {
+		return nil, err
+	}
+	materialSets := map[string]MaterialSet{}
 	if err := validateRoadModelGeometry(fc, false); err != nil {
 		return nil, err
 	}
@@ -164,13 +170,18 @@ func BarrierWaveFeaturesFromGeoJSON(fc *geojson.FeatureCollection, opt RoadModel
 			return nil, fmt.Errorf("wave feature %d has unsupported subtype %q", i, kind)
 		}
 		fields["feature_type"] = kind
-		material := MaterialRef{Color: "#B8BDC5", Mode: MaterialModeColor, DoubleSided: true}
-		if opt.TexturePath != "" {
-			material = MaterialRef{Path: opt.TexturePath, Mode: MaterialModeTexture, DoubleSided: true}
+		material, ok := materialSets[kind]
+		if !ok {
+			var err error
+			material, err = ResolveRoadMaterials(BuildTypeBarrierWave, kind, opt.TexturePath, opt.Materials, opt.MaterialOverrides)
+			if err != nil {
+				return nil, err
+			}
+			materialSets[kind] = material
 		}
 		row := featureFieldsFromGeoJSON(fields)
 		row["type"] = "barrier_" + kind
-		features = append(features, LineFeature{FeatureInput: FeatureInput{BuildType: BuildTypeBarrierWave, Geom: f.Geometry, Fields: fields, Features: []FeatureFields{row}}, Material: MaterialSet{Top: material, Side: MaterialRef{Color: "#8D949C", Mode: MaterialModeColor, DoubleSided: true}}, UV: UVOptions{Mapping: UVMappingSweep, RepeatX: 1, RepeatY: 1}})
+		features = append(features, LineFeature{FeatureInput: FeatureInput{BuildType: BuildTypeBarrierWave, Geom: f.Geometry, Fields: fields, Features: []FeatureFields{row}}, Material: material, UV: UVOptions{Mapping: UVMappingSweep, RepeatX: 1, RepeatY: 1}})
 	}
 	if len(features) == 0 {
 		return nil, fmt.Errorf("no supported wave barrier features")
