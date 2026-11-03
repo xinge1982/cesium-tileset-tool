@@ -447,27 +447,51 @@ Tilesets:
 
   roadsurface:
     name: 道路面
-    url: https://tileset.amap3d.online:48611/share/shanghai_g1503/roadsurface/tileset.json
+    url: /tilesets/roadsurface/tileset.json
     type: road_surface
+    enabled: true
+    maintainable: true
+    order: 6
+    partition:
+      table: t_tileset_partition_roadsurface
+    feature:
+      idField: id
+      sourceField: id
     lod:
       enabled: true
-      lod0: { modelFolder: lod0, geometricError: 4.0 }
-      lod1: { modelFolder: lod1, geometricError: 1.2 }
-      lod2: { modelFolder: lod2, geometricError: 0.6 }
+
+      # 远距离：桥面水平投影 + 桥塔前后贴片
+      lod0:
+        modelFolder: lod0
+        geometricError: 120.0
+
+      # 中远距离：桥面、桥墩、桥塔等主体简化结构
+      lod1:
+        modelFolder: lod1
+        geometricError: 35.0
+
+      # 近距离：主要结构和附属设施
+      lod2:
+        modelFolder: lod2
+        geometricError: 7.0
+
+      # 最近距离：完整精细模型
       lod3:
         modelFolder: lod3
         geometricError: 0
         localFirst: true
         minioFallback: true
-    enabled: true
-    maintainable: true
-    order: 6
-    feature:
-      idField: id
-      sourceField: id
     sources:
       - id: dlm
         name: 道路面
+
+        road:
+          buildType: road_surface
+          precision: 6
+          texturePath: networks/texture/road/lm.jpeg
+          centerlineTable:
+            name: hdroad
+            primaryKey: hroad_id
 
         match:
           operator: prefix
@@ -520,10 +544,6 @@ Tilesets:
             storage:
               type: geom
               column: geom
-    options:
-      - ["modelForwardAxis","Y"]
-      - ["modelUpAxis", "Z"]
-
 
 ImageTile: https://webst01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=6&x={x}&y={y}&z={z}
 
@@ -534,4 +554,4 @@ PhotoFileList:
   RightSideTable: aa_qj_4
   ImageSortField: timestamp
   ImageUrlField: url
-  ImageUrlPath: http://43.247.250.114:35005/shanghai_g1503/photo/
+  ImageUrlPath: http://tileset.amap3d.online:35005/shanghai_g1503/photo/

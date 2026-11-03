@@ -1200,4 +1200,4 @@ PhotoFileList:
   RightSideTable: aa_qj_4
   ImageSortField: timestamp
   ImageUrlField: url
-  ImageUrlPath: http://43.247.250.114:35005/jiangsu/photo/
+  ImageUrlPath: http://tileset.amap3d.online:35005/jiangsu/photo/
