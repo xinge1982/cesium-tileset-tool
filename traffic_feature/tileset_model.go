@@ -938,7 +938,10 @@ func generateAllGeoHashTile(db *gorm.DB, configName, partitionTable, tilesetsFol
 	now := time.Now()
 	lodLevels := configuredTileLODLevels(geoTable.LOD)
 	if len(roadSources) > 0 {
-		lodLevels = nil
+		lodLevels, err = configuredRoadLODLevels(geoTable.LOD)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for _, level := range lodLevels {
 		report.LOD = append(report.LOD, lodGenerationStats{
@@ -947,6 +950,9 @@ func generateAllGeoHashTile(db *gorm.DB, configName, partitionTable, tilesetsFol
 		})
 	}
 	geohashErrorBase := geohashGeometricErrorBase(lodLevels)
+	if len(roadSources) > 0 {
+		geohashErrorBase = roadGeometricErrorBase(lodLevels)
+	}
 	splitLevel := effectiveTilesetSplitLevel(geoTable.TilesetSplitLevel)
 	if len(roadSources) > 0 {
 		splitLevel = 0
@@ -959,6 +965,18 @@ func generateAllGeoHashTile(db *gorm.DB, configName, partitionTable, tilesetsFol
 	var errG error
 	if len(roadSources) > 0 {
 		tilesByGeohash, report.GeneratedRoads, errG = GenerateRoadSourceModels(context.Background(), db, geoTable, leafTiles, tilesetsFolder, boundStr)
+		// All levels reference the same generated files; count disk output only once.
+		for _, output := range report.GeneratedRoads {
+			for i := range report.LOD {
+				stats := &report.LOD[i]
+				stats.ModelGroupsRequested += output.Tiles
+				stats.ModelGroupsAvailable += output.Tiles
+				if stats.LOD == 3 {
+					stats.TileFilesGenerated += output.Tiles
+					stats.TileBytesGenerated += output.GLBBytes
+				}
+			}
+		}
 		for _, leaf := range leafTiles {
 			jobStats = append(jobStats, tileGenerationStats{queried: true, hasData: tilesByGeohash[leaf.Geohash] != nil})
 		}

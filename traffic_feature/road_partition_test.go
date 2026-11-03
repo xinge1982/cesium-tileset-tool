@@ -108,6 +108,26 @@ func TestRefineUntilStableIncludesRoadSources(t *testing.T) {
 // Exercise production export with SQL-provided adaptive leaves and source geometry.
 // No point-model lookup, MinIO request or nested road tileset is permitted.
 func TestGenerateAllGeoHashTileRoadExport(t *testing.T) {
+	testGenerateAllRoadLODExport(t, config.TilesetLODConfig{})
+}
+
+// Verify configured road thresholds in the actual serialized tileset and report.
+func TestGenerateAllGeoHashTileRoadConfiguredLOD(t *testing.T) {
+	t.Run("shanghai", func(t *testing.T) { testGenerateAllRoadLODExport(t, shanghaiRoadLODForTest(t)) })
+	t.Run("custom", func(t *testing.T) {
+		lod := shanghaiRoadLODForTest(t)
+		lod.Enabled = true
+		lod.LOD0.GeometricError, lod.LOD1.GeometricError, lod.LOD2.GeometricError = 200, 80, 16
+		testGenerateAllRoadLODExport(t, lod)
+	})
+}
+
+func testGenerateAllRoadLODExport(t *testing.T, lod config.TilesetLODConfig) {
+	t.Helper()
+	levels, err := configuredRoadLODLevels(lod)
+	if err != nil {
+		t.Fatal(err)
+	}
 	db, mock := roadMockDB(t)
 	coarse := geohash.EncodeWithPrecision(31, 121, 6)
 	cell := geohash.BoundingBox(coarse)
@@ -115,6 +135,7 @@ func TestGenerateAllGeoHashTileRoadExport(t *testing.T) {
 	fine := geohash.EncodeWithPrecision(y, x+.00005, 7)
 	previous := AllTiles
 	table := roadTestTable()
+	table.LOD = lod
 	// Even a configured split level must not create source or hierarchy sub-tilesets.
 	table.TilesetSplitLevel = 4
 	AllTiles = []GeoTable{table}
@@ -136,7 +157,29 @@ func TestGenerateAllGeoHashTileRoadExport(t *testing.T) {
 		if node == nil || node.Level != len(hash) || len(node.Children) != 1 {
 			t.Fatal("lost database leaf", hash, node)
 		}
+		if node.GeometricError < roadGeometricErrorBase(levels) {
+			t.Fatal("road spatial error ignored LOD settings", node.GeometricError)
+		}
+		content := node.Children[0]
+		firstURI := content.Content.Uri
+		for i, level := range levels {
+			if content.GeometricError != level.GeometricError || content.Content.Uri != firstURI || content.Refine != "REPLACE" {
+				t.Fatal("road LOD error/URI/refinement mismatch", content)
+			}
+			if i > 0 && content.Transform != nil {
+				t.Fatal("LOD transform applied more than once")
+			}
+			if i < len(levels)-1 {
+				if len(content.Children) != 1 {
+					t.Fatal("missing configured road LOD")
+				}
+				content = content.Children[0]
+			} else if len(content.Children) != 0 {
+				t.Fatal("LOD3 is not terminal")
+			}
+		}
 	}
+	uniqueModels := map[string]bool{}
 	models := 0
 	var check func(*TileNode)
 	check = func(node *TileNode) {
@@ -151,6 +194,7 @@ func TestGenerateAllGeoHashTileRoadExport(t *testing.T) {
 			if err != nil || !bytes.Contains(data, []byte("9007199254740993")) {
 				t.Fatal("database feature ID lost precision", err)
 			}
+			uniqueModels[node.Content.Uri] = true
 			models++
 		}
 		for _, child := range node.Children {
@@ -158,8 +202,8 @@ func TestGenerateAllGeoHashTileRoadExport(t *testing.T) {
 		}
 	}
 	check(tileset.Root)
-	if models != 2 {
-		t.Fatal("unexpected generated model count", models)
+	if models != 2*len(levels) || len(uniqueModels) != 2 {
+		t.Fatal("LOD discarded or duplicated model files", models, uniqueModels)
 	}
 	tilesetJSONCount := 0
 	if err = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
@@ -180,6 +224,40 @@ func TestGenerateAllGeoHashTileRoadExport(t *testing.T) {
 	}
 	if report.Status != "success" || report.LeafTilesFound != 2 || report.LeafTilesGenerated != 2 || len(report.GeneratedRoads) != 1 || report.ExternalTilesets != 0 {
 		t.Fatal(report)
+	}
+	if len(report.LOD) != len(levels) || report.Files.GLBFiles != 2 {
+		t.Fatal("LOD report missing or GLBs duplicated", report)
+	}
+	for i, level := range levels {
+		stats := report.LOD[i]
+		if stats.GeometricError != level.GeometricError || stats.ModelGroupsAvailable != 2 {
+			t.Fatal("road LOD report mismatch", stats)
+		}
+		if level.Level == 3 {
+			if stats.TileFilesGenerated != 2 || stats.TileBytesGenerated <= 0 {
+				t.Fatal("missing generated GLB statistics", stats)
+			}
+		} else if stats.TileFilesGenerated != 0 || stats.TileBytesGenerated != 0 {
+			t.Fatal("shared GLB counted repeatedly", stats)
+		}
+	}
+	// Check the JSON consumers actually receive, rather than just the in-memory tree.
+	jsonData, err := os.ReadFile(filepath.Join(dir, "tileset.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var serialized Tileset
+	if err = json.Unmarshal(jsonData, &serialized); err != nil {
+		t.Fatal(err)
+	}
+	first := FindNodeByGeohash(serialized.Root, coarse).Children[0]
+	for i, level := range levels {
+		if first.GeometricError != level.GeometricError {
+			t.Fatal("serialized road LOD ignored configuration", first.GeometricError, level.GeometricError)
+		}
+		if i < len(levels)-1 {
+			first = first.Children[0]
+		}
 	}
 	if err = mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

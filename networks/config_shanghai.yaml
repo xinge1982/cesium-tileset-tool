@@ -458,24 +458,26 @@ Tilesets:
       idField: id
       sourceField: id
     lod:
+      # 道路各级复用现场生成的 GLB；geometricError 控制替换阈值，暂不简化网格。
+      # modelFolder、localFirst、minioFallback 仅用于已有模型，道路源不读取这些目录或 MinIO。
       enabled: true
 
-      # 远距离：桥面水平投影 + 桥塔前后贴片
+      # 远距离道路内容
       lod0:
         modelFolder: lod0
         geometricError: 120.0
 
-      # 中远距离：桥面、桥墩、桥塔等主体简化结构
+      # 中远距离替换阈值
       lod1:
         modelFolder: lod1
         geometricError: 35.0
 
-      # 近距离：主要结构和附属设施
+      # 近距离替换阈值
       lod2:
         modelFolder: lod2
         geometricError: 7.0
 
-      # 最近距离：完整精细模型
+      # 最近距离：终端内容误差为 0
       lod3:
         modelFolder: lod3
         geometricError: 0

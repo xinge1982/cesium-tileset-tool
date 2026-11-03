@@ -28,6 +28,16 @@
 在道路 tileset 的 `sources` 中配置以下源，示例表名需替换为实际表名；几何列必须具有正确的 PostGIS SRID。
 
 ```yaml
+lod:
+  enabled: true
+  lod0:
+    geometricError: 120
+  lod1:
+    geometricError: 35
+  lod2:
+    geometricError: 7
+  lod3:
+    geometricError: 0
 sources:
   - id: road-surface
     modelSource: generated-road
@@ -82,7 +92,17 @@ road:
 
 立柱参数单位为米，`radialSegments` 除外。直径默认/最小 0.114，默认柱顶比波板中心高 0.15；`height` 为显式柱高，优先于自动高度。`lateralOffset` 调整横向位置，零值沿用默认值。未设置纹理时使用颜色材质。道路面的 `hroad_id` 会补充为 `road_id`，用于中心线关联。
 
-旧版 `road.precision` 保留配置兼容，但不再控制主流程分片；实际深度由数据库细分结果决定。当前道路不生成旧设备模型的 LOD0–LOD3。含道路源的增量更新会先重新细分再完整导出，以更新受上游链变化影响的下游模型。
+旧版 `road.precision` 保留配置兼容，但不再控制主流程分片；实际深度由数据库细分结果决定。含道路源的增量更新会先重新细分再完整导出，以更新受上游链变化影响的下游模型。
+
+## LOD 与显示距离
+
+`lod.enabled: true` 时，每个生成的道路内容按 LOD0 → LOD1 → LOD2 → LOD3 构造 `REPLACE` 链，节点使用各级配置的 `geometricError`。例如上海配置的 `120 / 35 / 7 / 0` 全部写入最终 JSON。各级误差必须有限、非负、严格递减，LOD3 必须为 0。
+
+当前各级引用同一份现场生成的 GLB，不复制文件、不重复建模；尚未生成不同简化程度的几何。因此这些阈值会控制加载/替换层级，但不会带来网格简化或远景文件体积下降。多个道路源分别构造各自的替换链，保留属性和 GPU instancing。
+
+geohash 空间父节点以第一个正 LOD 误差为基值，并逐级放大，避免停留在空节点而看不到道路。`lod.enabled: false` 时只保留 LOD3 内容，空间误差基值默认 128，内容节点仍为 0。原有设备模型的误差规则保持不变。
+
+`modelFolder`、`localFirst`、`minioFallback` 属于已有设备/建筑模型的获取配置，道路源不读取这些目录或 MinIO 模型。生成报告的 `lod` 记录实际阈值和可用模型组数；共用的 GLB 文件及字节数只在 LOD3 计入一次。
 
 ## 直接使用道路包
 

@@ -85,6 +85,7 @@ type GeneratedRoadOutput struct {
 	BuildType       string `json:"buildType"`
 	Tiles           int    `json:"tiles"`
 	SourceInstances int    `json:"sourceInstances"`
+	GLBBytes        int64  `json:"glbBytes"`
 }
 
 type roadFeatureLoader func(context.Context, config.TableConfig, *config.GeneratedRoadConfig) (*geojson.FeatureCollection, error)
@@ -103,6 +104,10 @@ func GenerateRoadSourceModels(ctx context.Context, db *gorm.DB, table GeoTable, 
 // Preserve complete geometry and chain context; clip meshes only at final leaf edges.
 func generateRoadSourceModels(ctx context.Context, table GeoTable, leaves []*GeoHashTile, outputDirectory, bound string, load roadFeatureLoader) (map[string]*TileNode, []GeneratedRoadOutput, error) {
 	sources, err := roadModelSources(table)
+	if err != nil {
+		return nil, nil, err
+	}
+	levels, err := configuredRoadLODLevels(table.LOD)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -173,7 +178,9 @@ func generateRoadSourceModels(ctx context.Context, table GeoTable, leaves []*Geo
 		if err != nil {
 			return nil, nil, fmt.Errorf("generate %s geometry: %w", source.Table.Name, err)
 		}
+		var glbBytes int64
 		for _, built := range result.Tiles {
+			glbBytes += int64(built.GLBBytes)
 			leaf, ok := byHash[built.Geohash]
 			if !ok {
 				return nil, nil, fmt.Errorf("generator returned non-database leaf %s", built.Geohash)
@@ -187,11 +194,9 @@ func generateRoadSourceModels(ctx context.Context, table GeoTable, leaves []*Geo
 				node = &TileNode{Geohash: leaf.Geohash, Level: leaf.Level, Refine: "ADD"}
 				nodes[built.Geohash] = node
 			}
-			transform := built.Transform
-			// Existing hierarchy refresh expects a world box and converts it once.
-			node.Children = append(node.Children, &TileNode{BoundingVolume: BoundingVolume{Box: roadWorldBox(built.Box, transform)}, Transform: &transform, Content: &TileContent{Uri: filepath.ToSlash(relative)}, Refine: "ADD"})
+			node.Children = append(node.Children, buildGeneratedRoadLODChain(filepath.ToSlash(relative), built.Box, built.Transform, levels, built.Geohash, i))
 		}
-		outputs = append(outputs, GeneratedRoadOutput{SourceID: source.ID, Table: source.Table.Name, BuildType: options.BuildType, Tiles: len(result.Tiles), SourceInstances: result.SourceInstances})
+		outputs = append(outputs, GeneratedRoadOutput{SourceID: source.ID, Table: source.Table.Name, BuildType: options.BuildType, Tiles: len(result.Tiles), SourceInstances: result.SourceInstances, GLBBytes: glbBytes})
 	}
 	success = true
 	return nodes, outputs, nil
