@@ -121,6 +121,8 @@ type TilesetSourceLODConfig struct {
 // Configure geometry generated during tileset export; existing sources need no changes.
 type GeneratedRoadConfig struct {
 	BuildType string `yaml:"buildType" json:"buildType"`
+	// Zero uses 1000 source rows per database query.
+	BatchSize int `yaml:"batchSize" json:"batchSize"`
 	// Retained for config compatibility; export depth comes from database partitions.
 	Precision          int                                               `yaml:"precision" json:"precision"`
 	TexturePath        string                                            `yaml:"texturePath" json:"texturePath"`

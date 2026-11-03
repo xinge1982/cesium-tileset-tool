@@ -150,7 +150,7 @@ func testGenerateAllRoadLODExport(t *testing.T, lod config.TilesetLODConfig) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery(`SELECT ST_AsGeoJSON`).WillReturnRows(sqlmock.NewRows([]string{"geometry", "properties"}).AddRow(string(geometry), `{"id":9007199254740993,"name":"road"}`))
+	mock.ExpectQuery(`SELECT ST_AsGeoJSON`).WillReturnRows(sqlmock.NewRows([]string{"geometry", "properties", "cursor_key"}).AddRow(string(geometry), `{"id":9007199254740993,"name":"road"}`, int64(9007199254740993)))
 	dir := t.TempDir()
 	tileset, err := generateAllGeoHashTile(db, "road-test", table.PartitionTableName, dir, "120,30,122,32")
 	if err != nil {

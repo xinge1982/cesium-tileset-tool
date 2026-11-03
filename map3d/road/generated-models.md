@@ -17,11 +17,11 @@
 `GenerateRoadSourceModels(ctx, db, table, leaves, outputDirectory, bound)` 接收数据库叶子，返回待加入既有层级的节点和源生成统计；不创建自己的 tileset 层级。它由 `GenerateAllGeoHashTile` 的道路分支调用：
 
 - 道路面从完整 Polygon(Z)/MultiPolygon(Z) 三角化，再将网格裁切到各叶子格子。
-- 护栏先按完整 LineString(Z)/MultiLineString(Z) 构建链并确定 UV、采样相位，再按最终叶子裁切波板网格。立柱按采样锚点确定唯一归属，保留 GPU instancing。
+- 护栏按本次范围内读取的完整 LineString(Z)/MultiLineString(Z) 构建链并确定 UV、采样相位，再按最终叶子裁切波板网格。立柱按采样锚点确定唯一归属，保留 GPU instancing。
 - 一个叶子可以有道路面和护栏等多个道路模型内容节点，全部直接引用 GLB。父级包围盒在 ECEF 中合并，各 GLB 的 ENU 变换只应用一次。
 - 输出模型位于 `road-models/run-*/source-*/tiles/<geohash>/`，主目录只生成一个道路 `tileset.json`；另外仍有编译/分片报告。道路分支不按 `partition.splitLevel` 拆出其他 tileset JSON。
 
-源几何读取时转换成 EPSG:4326 并保留 Z。护栏输入线 Z 为地面高程。`bound` 限定参与细分的格子及相交源要素；跨越范围的原始要素会保留，模型裁切在叶子边界进行，不在项目范围边界重新裁切。因此边缘格子的模型可能稍超出项目 `bound`。完整护栏链在范围筛选前处理，避免不同项目范围改变链内采样起点。
+源几何读取时转换成 EPSG:4326 并保留 Z。护栏输入线 Z 为地面高程。`bound` 限定参与细分的格子及相交源要素；跨越范围的原始要素会保留，模型裁切在叶子边界进行，不在项目范围边界重新裁切。因此边缘格子的模型可能稍超出项目 `bound`。数据库读取阶段会先按 `bound` 筛选道路和中心线，不额外查询范围外的护栏链上下文；缩小测试范围可能改变链起点、采样相位或端点归属。正式完整导出应使用覆盖全部数据的范围。
 
 ## 配置示例
 
@@ -48,6 +48,7 @@ sources:
       geometryField: geom
     road:
       buildType: road_surface
+      batchSize: 1000
       # texturePath: /data/textures/road.png
       # centerlineTable:
       #   schema: public
@@ -93,6 +94,14 @@ road:
 立柱参数单位为米，`radialSegments` 除外。直径默认/最小 0.114，默认柱顶比波板中心高 0.15；`height` 为显式柱高，优先于自动高度。`lateralOffset` 调整横向位置，零值沿用默认值。未设置纹理时使用颜色材质。道路面的 `hroad_id` 会补充为 `road_id`，用于中心线关联。
 
 旧版 `road.precision` 保留配置兼容，但不再控制主流程分片；实际深度由数据库细分结果决定。含道路源的增量更新会先重新细分再完整导出，以更新受上游链变化影响的下游模型。
+
+## 范围筛选和批量读取
+
+`generateRoadSourceModels` 解析的同一 `bound` 会传给道路源和 `centerlineTable` 的数据库读取。每批查询均使用 `ST_Intersects(ST_Transform(geom,4326), ST_MakeEnvelope(...,4326))`，并保留原有分类过滤；跨越范围边界的要素读取完整几何，不在 SQL 中裁断，也不会把范围外的全表几何读入 Go。
+
+`road.batchSize` 控制每批记录数，默认 1000（省略或设为 0），负数报错；中心线继承对应道路源的批大小。采用原生主键顺序的 `ORDER BY primaryKey ASC LIMIT batchSize`，后续批次追加 `primaryKey > lastKey`，不使用大 OFFSET，也不长期持有覆盖全表结果集的 `Rows()`。`table.primaryKey` 应为真实、非空且唯一的单列主键，默认 `id`；支持常用 bigint、字符串等可排序主键。分页游标保留驱动返回的主键类型，业务属性仍保留大整数精度和 Z。
+
+批量限制的是单次数据库查询及其结果缓冲；当前网格构建仍需要汇总选定范围内的 GeoJSON，并非整个建模过程恒定内存。后续批次查询或解析失败会中止导出，不返回已读的部分集合；取消上下文也会停止后续读取。
 
 ## 按模型部位和子类型匹配贴图
 

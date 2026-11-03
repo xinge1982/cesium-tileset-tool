@@ -489,6 +489,7 @@ Tilesets:
 
         road:
           buildType: road_surface
+          batchSize: 1000
           precision: 6
           materials:
             top:

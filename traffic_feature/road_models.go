@@ -47,6 +47,9 @@ func ResolveModelSource(source config.TilesetSourceConfig) (string, error) {
 		default:
 			return "", fmt.Errorf("unsupported road buildType %q", source.Road.BuildType)
 		}
+		if source.Road.BatchSize < 0 {
+			return "", fmt.Errorf("source %s road batchSize must be positive or zero for the default", source.ID)
+		}
 		materials, overrides := roadMaterialOptionsFromConfig(source.Road)
 		if err := road.ValidateRoadMaterials(road.BuildType(source.Road.BuildType), materials, overrides); err != nil {
 			return "", fmt.Errorf("source %s: %w", source.ID, err)
@@ -92,7 +95,15 @@ type GeneratedRoadOutput struct {
 	GLBBytes        int64  `json:"glbBytes"`
 }
 
-type roadFeatureLoader func(context.Context, config.TableConfig, *config.GeneratedRoadConfig) (*geojson.FeatureCollection, error)
+const defaultRoadFeatureBatchSize = 1000
+
+// Pass the selected project range and query batch size to every geometry source.
+type roadFeatureReadOptions struct {
+	Bound     [4]float64
+	BatchSize int
+}
+
+type roadFeatureLoader func(context.Context, config.TableConfig, *config.GeneratedRoadConfig, roadFeatureReadOptions) (*geojson.FeatureCollection, error)
 
 // Build GLBs for the database leaves selected by the refinement pass.
 // The caller owns the hierarchy and writes the single road tileset.json.
@@ -100,12 +111,12 @@ func GenerateRoadSourceModels(ctx context.Context, db *gorm.DB, table GeoTable, 
 	if db == nil {
 		return nil, nil, fmt.Errorf("road generation database is nil")
 	}
-	return generateRoadSourceModels(ctx, table, leaves, outputDirectory, bound, func(ctx context.Context, t config.TableConfig, options *config.GeneratedRoadConfig) (*geojson.FeatureCollection, error) {
-		return readRoadFeatureCollection(ctx, db, t, options)
+	return generateRoadSourceModels(ctx, table, leaves, outputDirectory, bound, func(ctx context.Context, t config.TableConfig, options *config.GeneratedRoadConfig, readOptions roadFeatureReadOptions) (*geojson.FeatureCollection, error) {
+		return readRoadFeatureCollection(ctx, db, t, options, readOptions)
 	})
 }
 
-// Preserve complete geometry and chain context; clip meshes only at final leaf edges.
+// Load complete features intersecting the requested range, then clip meshes at leaf edges.
 func generateRoadSourceModels(ctx context.Context, table GeoTable, leaves []*GeoHashTile, outputDirectory, bound string, load roadFeatureLoader) (map[string]*TileNode, []GeneratedRoadOutput, error) {
 	sources, err := roadModelSources(table)
 	if err != nil {
@@ -158,7 +169,12 @@ func generateRoadSourceModels(ctx context.Context, table GeoTable, leaves []*Geo
 			return nil, nil, err
 		}
 		options := source.Road
-		collection, err := load(ctx, source.Table, options)
+		batchSize := options.BatchSize
+		if batchSize == 0 {
+			batchSize = defaultRoadFeatureBatchSize
+		}
+		readOptions := roadFeatureReadOptions{Bound: bounds, BatchSize: batchSize}
+		collection, err := load(ctx, source.Table, options, readOptions)
 		if err != nil {
 			return nil, nil, fmt.Errorf("load road source %s: %w", source.Table.Name, err)
 		}
@@ -167,7 +183,7 @@ func generateRoadSourceModels(ctx context.Context, table GeoTable, leaves []*Geo
 		}
 		var centerlines *geojson.FeatureCollection
 		if options.CenterlineTable != nil {
-			centerlines, err = load(ctx, *options.CenterlineTable, nil)
+			centerlines, err = load(ctx, *options.CenterlineTable, nil, readOptions)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -277,8 +293,8 @@ func roadSourceFilter(options *config.GeneratedRoadConfig) (string, []any, error
 	return predicate, args, nil
 }
 
-// Bind category values rather than allowing raw source SQL in configuration.
-func roadFeatureQuery(table config.TableConfig, options *config.GeneratedRoadConfig) (string, []any, error) {
+// Bind the project envelope, category values and native primary-key cursor on every page.
+func roadFeatureQuery(table config.TableConfig, options *config.GeneratedRoadConfig, readOptions roadFeatureReadOptions, cursor any) (string, []any, error) {
 	name, geometry, pk, err := roadSourceRelation(table)
 	if err != nil {
 		return "", nil, err
@@ -287,51 +303,108 @@ func roadFeatureQuery(table config.TableConfig, options *config.GeneratedRoadCon
 	if err != nil {
 		return "", nil, err
 	}
-	query := fmt.Sprintf(`SELECT ST_AsGeoJSON(ST_Transform(t.%s,4326)) AS geometry, (to_jsonb(t)-?)::text AS properties FROM %s AS t WHERE t.%s IS NOT NULL`, quoteIdentifier(geometry), name, quoteIdentifier(geometry))
-	query += filter + " ORDER BY t." + quoteIdentifier(pk)
-	return query, append([]any{geometry}, filterArgs...), nil
+	b := readOptions.Bound
+	if !(b[0] >= -180 && b[2] <= 180 && b[1] >= -90 && b[3] <= 90 && b[0] < b[2] && b[1] < b[3]) {
+		return "", nil, fmt.Errorf("road query requires a valid WGS84 bound")
+	}
+	batchSize := readOptions.BatchSize
+	if batchSize == 0 {
+		batchSize = defaultRoadFeatureBatchSize
+	}
+	if batchSize < 0 {
+		return "", nil, fmt.Errorf("road query batchSize must be positive")
+	}
+	query := fmt.Sprintf(`SELECT ST_AsGeoJSON(ST_Transform(t.%s,4326)) AS geometry, (to_jsonb(t)-?)::text AS properties, t.%s AS cursor_key FROM %s AS t WHERE t.%s IS NOT NULL AND ST_Intersects(ST_Transform(t.%s,4326), ST_MakeEnvelope(?, ?, ?, ?,4326))`, quoteIdentifier(geometry), quoteIdentifier(pk), name, quoteIdentifier(geometry), quoteIdentifier(geometry))
+	args := []any{geometry, b[0], b[1], b[2], b[3]}
+	query += filter
+	args = append(args, filterArgs...)
+	if cursor != nil {
+		query += " AND t." + quoteIdentifier(pk) + " > ?"
+		args = append(args, cursor)
+	}
+	query += " ORDER BY t." + quoteIdentifier(pk) + " ASC LIMIT ?"
+	return query, append(args, batchSize), nil
 }
 
-// Read one row at a time; preserve Z, all business properties and 64-bit IDs.
-func readRoadFeatureCollection(ctx context.Context, db *gorm.DB, table config.TableConfig, options *config.GeneratedRoadConfig) (*geojson.FeatureCollection, error) {
-	query, args, err := roadFeatureQuery(table, options)
-	if err != nil {
-		return nil, err
+// Read bounded source geometry in keyset batches, retaining Z and exact business IDs.
+// Only one query batch is buffered; the selected features remain available for mesh building.
+func readRoadFeatureCollection(ctx context.Context, db *gorm.DB, table config.TableConfig, options *config.GeneratedRoadConfig, readOptions roadFeatureReadOptions) (*geojson.FeatureCollection, error) {
+	if ctx == nil || db == nil {
+		return nil, fmt.Errorf("road feature reader requires context and database")
 	}
-	rows, err := db.WithContext(ctx).Raw(query, args...).Rows()
-	if err != nil {
-		return nil, err
+	if readOptions.BatchSize == 0 {
+		readOptions.BatchSize = defaultRoadFeatureBatchSize
 	}
-	defer rows.Close()
-	fc := &geojson.FeatureCollection{}
 	pk := table.PrimaryKey
 	if pk == "" {
 		pk = "id"
 	}
-	for rows.Next() {
-		var geometry, properties string
-		if err = rows.Scan(&geometry, &properties); err != nil {
+	fc := &geojson.FeatureCollection{}
+	var cursor any
+	for {
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		var g geom.T
-		err := geojson.Unmarshal([]byte(geometry), &g)
+		query, args, err := roadFeatureQuery(table, options, readOptions, cursor)
 		if err != nil {
 			return nil, err
 		}
-		var fields map[string]any
-		decoder := json.NewDecoder(bytes.NewBufferString(properties))
-		decoder.UseNumber()
-		if err = decoder.Decode(&fields); err != nil {
-			return nil, err
+		// Scan one limited page, releasing its SQL rows before the next query/mesh stage.
+		// A map retains the driver's primary-key type (not JSON float64) for native ordering.
+		var batch []map[string]any
+		if err = db.WithContext(ctx).Raw(query, args...).Scan(&batch).Error; err != nil {
+			return nil, fmt.Errorf("read road source %s batch: %w", table.Name, err)
 		}
-		id, ok := fields[pk]
-		if !ok || id == nil {
-			return nil, fmt.Errorf("road source %s requires primary key %s", table.Name, pk)
+		for _, row := range batch {
+			if err = ctx.Err(); err != nil {
+				return nil, err
+			}
+			key := row["cursor_key"]
+			if key == nil {
+				return nil, fmt.Errorf("road source %s requires a non-null primary key %s", table.Name, pk)
+			}
+			geometry, err := roadFeatureText(row["geometry"])
+			if err != nil {
+				return nil, err
+			}
+			properties, err := roadFeatureText(row["properties"])
+			if err != nil {
+				return nil, err
+			}
+			var g geom.T
+			if err = geojson.Unmarshal([]byte(geometry), &g); err != nil {
+				return nil, fmt.Errorf("road source %s geometry: %w", table.Name, err)
+			}
+			var fields map[string]any
+			decoder := json.NewDecoder(bytes.NewBufferString(properties))
+			decoder.UseNumber()
+			if err = decoder.Decode(&fields); err != nil {
+				return nil, err
+			}
+			id, ok := fields[pk]
+			if !ok || id == nil {
+				return nil, fmt.Errorf("road source %s requires primary key %s", table.Name, pk)
+			}
+			fields["id"] = fmt.Sprint(id)
+			fc.Features = append(fc.Features, &geojson.Feature{Geometry: g, Properties: fields})
+			cursor = key
 		}
-		fields["id"] = fmt.Sprint(id)
-		fc.Features = append(fc.Features, &geojson.Feature{Geometry: g, Properties: fields})
+		if len(batch) < readOptions.BatchSize {
+			return fc, nil
+		}
 	}
-	return fc, rows.Err()
+}
+
+// Accept text values returned by either the PostgreSQL driver or GORM's map scanner.
+func roadFeatureText(value any) (string, error) {
+	switch text := value.(type) {
+	case string:
+		return text, nil
+	case []byte:
+		return string(text), nil
+	default:
+		return "", fmt.Errorf("expected road geometry/properties text, got %T", value)
+	}
 }
 
 // Re-refine before a complete road export because upstream edits can alter a chain.

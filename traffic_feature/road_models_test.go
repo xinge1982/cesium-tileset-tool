@@ -50,7 +50,7 @@ func TestRoadModelSourceClassification(t *testing.T) {
 // Bind filters consistently and count crossing geometries in all intersected cells.
 func TestRoadFeatureAndPartitionQueries(t *testing.T) {
 	source := config.TilesetSourceConfig{Table: config.TableConfig{Schema: "public", Name: "hdpsidewall", PrimaryKey: "fid", GeometryField: "shape"}, Road: &config.GeneratedRoadConfig{BuildType: "barrier_wave", FilterField: "bxdl", FilterValues: []string{"5", "7"}}}
-	query, args, err := roadFeatureQuery(source.Table, source.Road)
+	query, args, err := roadFeatureQuery(source.Table, source.Road, roadFeatureReadOptions{Bound: [4]float64{120, 30, 122, 32}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,14 +59,14 @@ func TestRoadFeatureAndPartitionQueries(t *testing.T) {
 			t.Fatal(query)
 		}
 	}
-	if len(args) != 2 || args[0] != "shape" {
+	if len(args) != 7 || args[0] != "shape" {
 		t.Fatal(args)
 	}
-	query, _, err = roadFeatureQuery(config.TableConfig{Name: `walls"; DROP TABLE x; --`}, nil)
+	query, _, err = roadFeatureQuery(config.TableConfig{Name: `walls"; DROP TABLE x; --`}, nil, roadFeatureReadOptions{Bound: [4]float64{120, 30, 122, 32}}, nil)
 	if err != nil || !strings.Contains(query, `"walls""; DROP TABLE x; --"`) {
 		t.Fatal(query, err)
 	}
-	if _, _, err = roadFeatureQuery(source.Table, &config.GeneratedRoadConfig{FilterField: "type"}); err == nil {
+	if _, _, err = roadFeatureQuery(source.Table, &config.GeneratedRoadConfig{FilterField: "type"}, roadFeatureReadOptions{Bound: [4]float64{120, 30, 122, 32}}, nil); err == nil {
 		t.Fatal("empty filter accepted")
 	}
 	source.Road.WaveSubtypeField = "rail_kind"
@@ -96,13 +96,23 @@ func TestGenerateRoadSourcesForDatabaseLeaves(t *testing.T) {
 	surfaces := &geojson.FeatureCollection{Features: []*geojson.Feature{{Geometry: geom.NewPolygon(geom.XYZ).MustSetCoords([][]geom.Coord{{{x - .0001, y - .00001, 10}, {x + .0001, y - .00001, 10}, {x + .0001, y + .00001, 10}, {x - .0001, y + .00001, 10}, {x - .0001, y - .00001, 10}}}), Properties: map[string]any{"id": "surface-1", "hroad_id": json.Number("9007199254740993")}}}}
 	walls := &geojson.FeatureCollection{Features: []*geojson.Feature{{Geometry: geom.NewLineString(geom.XYZ).MustSetCoords([]geom.Coord{{x - .00015, y, 10}, {x + .00015, y, 10}}), Properties: map[string]any{"id": "rail-1", "direction": json.Number("2"), "bxdl": 5}}}}
 	sources := map[string]config.TilesetSourceConfig{
-		"surface": {ID: "surface", Table: config.TableConfig{Name: "surface"}, Road: &config.GeneratedRoadConfig{BuildType: "road_surface", Precision: 4}},
+		"surface": {ID: "surface", Table: config.TableConfig{Name: "surface"}, Road: &config.GeneratedRoadConfig{BuildType: "road_surface", Precision: 4, BatchSize: 2, CenterlineTable: &config.TableConfig{Name: "centers", PrimaryKey: "hroad_id"}}},
 		"walls":   {ID: "walls", Table: config.TableConfig{Name: "walls"}, Road: &config.GeneratedRoadConfig{BuildType: "barrier_wave", Precision: 4, WaveSubtype: "wave_two"}},
 	}
 	table := GeoTable{GeoTableNames: []string{"surface", "walls"}, TilesetSources: sources}
 	reads := map[string]int{}
-	load := func(_ context.Context, table config.TableConfig, _ *config.GeneratedRoadConfig) (*geojson.FeatureCollection, error) {
+	load := func(_ context.Context, table config.TableConfig, _ *config.GeneratedRoadConfig, readOptions roadFeatureReadOptions) (*geojson.FeatureCollection, error) {
+		expectedSize := defaultRoadFeatureBatchSize
+		if table.Name == "surface" || table.Name == "centers" {
+			expectedSize = 2
+		}
+		if readOptions.Bound != [4]float64{120, 30, 122, 32} || readOptions.BatchSize != expectedSize {
+			t.Fatal("missing bounded batch options", table.Name, readOptions)
+		}
 		reads[table.Name]++
+		if table.Name == "centers" {
+			return &geojson.FeatureCollection{}, nil
+		}
 		if table.Name == "surface" {
 			return surfaces, nil
 		}
@@ -113,7 +123,7 @@ func TestGenerateRoadSourcesForDatabaseLeaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(nodes) != 2 || len(outputs) != 2 || reads["surface"] != 1 || reads["walls"] != 1 {
+	if len(nodes) != 2 || len(outputs) != 2 || reads["surface"] != 1 || reads["walls"] != 1 || reads["centers"] != 1 {
 		t.Fatal(nodes, outputs, reads)
 	}
 	root := &TileNode{Refine: "ADD"}
@@ -189,7 +199,7 @@ func TestGenerateRoadSourcesForDatabaseLeaves(t *testing.T) {
 		t.Fatal("reused old models")
 	}
 	// Missing leaves must not cause a fallback to fixed-precision slicing or a DB read.
-	empty, _, err := generateRoadSourceModels(context.Background(), table, nil, dir, "120,30,122,32", func(context.Context, config.TableConfig, *config.GeneratedRoadConfig) (*geojson.FeatureCollection, error) {
+	empty, _, err := generateRoadSourceModels(context.Background(), table, nil, dir, "120,30,122,32", func(context.Context, config.TableConfig, *config.GeneratedRoadConfig, roadFeatureReadOptions) (*geojson.FeatureCollection, error) {
 		t.Fatal("unexpected source query")
 		return nil, nil
 	})
