@@ -489,7 +489,7 @@ Tilesets:
 
         road:
           buildType: road_surface
-          batchSize: 1000
+          batchSize: 100
           precision: 6
           materials:
             top:
@@ -550,6 +550,68 @@ Tilesets:
               type: geom
               column: geom
 
+      - id: side_wall
+        name: 护栏路缘石
+
+        road:
+          buildType: barrier_wave
+          batchSize: 100
+          precision: 6
+          materials:
+            rail:
+              color: "#B8BDC5"
+            post:
+              color: "#8D949C"
+          materialOverrides:
+            wave_three:
+              rail:
+                color: "#B8BDC5"
+            wave_nose_end:
+              rail:
+                texturePath: networks/texture/road/bd_01.png
+          centerlineTable:
+            name: hdroad
+            primaryKey: hroad_id
+
+        match:
+          operator: prefix
+          value: hdpsidewall
+
+        keyMapping:
+          operator: removePrefix
+          value: hdpsidewall.
+
+        table:
+          schema: public
+          name: aa_hdpsidewallbak_bh
+          primaryKey: id
+          geometryField: geom
+
+        fields:
+          - name: id
+            label: 编号
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: bz
+            label: 修改原因
+            detail: true
+            list: true
+            search: true
+            editable: false
+            submit: true
+
+          - name: geom
+            label: 位置
+            detail: true
+            list: false
+            search: false
+            editable: false
+            storage:
+              type: geom
+              column: geom
 ImageTile: https://webst01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=6&x={x}&y={y}&z={z}
 
 NetworkFolder: ./networks/network_shanghai_g1503_2026

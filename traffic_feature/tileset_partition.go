@@ -390,8 +390,18 @@ func RefineUntilStable(db *gorm.DB, boundStr string, outputDirectory string) (re
 		return err
 	}
 	for _, table := range AllTiles {
-		if _, sourceErr := roadModelSources(table); sourceErr != nil {
+		var maxSourcePrecision = 0
+		if sources, sourceErr := roadModelSources(table); sourceErr != nil {
 			return sourceErr
+		} else {
+			for _, source := range sources {
+				if source.Road != nil && source.Road.Precision > maxSourcePrecision {
+					maxSourcePrecision = source.Road.Precision
+				}
+			}
+		}
+		if maxSourcePrecision == 0 {
+			maxSourcePrecision = int(MAX_GEOHASH_LEVEL)
 		}
 		if len(table.GeoTableNames) == 0 {
 			continue
@@ -401,7 +411,7 @@ func RefineUntilStable(db *gorm.DB, boundStr string, outputDirectory string) (re
 			PartitionTable: table.PartitionTableName,
 			SourceTables:   append([]string(nil), table.GeoTableNames...),
 			Threshold:      table.Threshold,
-			MaxLevel:       MAX_GEOHASH_LEVEL,
+			MaxLevel:       int16(maxSourcePrecision),
 			Levels:         make([]refinementLevelStats, 0),
 		}
 		log.Infof("begin refine tileset table: %+v", table)
@@ -422,7 +432,7 @@ func RefineUntilStable(db *gorm.DB, boundStr string, outputDirectory string) (re
 		}
 		tableStats.InitialCountUpdateMilliseconds = time.Since(countUpdateStartedAt).Milliseconds()
 		for {
-			if level >= MAX_GEOHASH_LEVEL {
+			if level >= tableStats.MaxLevel {
 				break
 			}
 
