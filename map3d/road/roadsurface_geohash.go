@@ -10,12 +10,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"cesium-tileset-tool/cesium"
 	"cesium-tileset-tool/map3d/road/common"
 	"cesium-tileset-tool/mapmodel/aabb"
 
 	"github.com/mmcloughlin/geohash"
 	"github.com/qmuntal/gltf"
+	log "github.com/sirupsen/logrus"
 	"github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/encoding/geojson"
 )
@@ -136,6 +139,7 @@ func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection
 	features := RoadSurfaceFeaturesFromGeoJSON(roads, opt.TexturePath)
 	sourceMeshes := make([][]common.RoadSurfaceMesh, len(features))
 	originalArea := 0.0
+	lastUpdate := time.Now()
 	for i := range features {
 		features[i].Material = material
 		// Keep business fields, including fields beyond id/type.
@@ -153,10 +157,21 @@ func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection
 		for _, mesh := range sourceMeshes[i] {
 			originalArea += roadSliceMeshArea(mesh)
 		}
+
+		if time.Since(lastUpdate) >= 500*time.Millisecond || i+1 == len(features) {
+			log.Printf("Features Progress: %d/%d (%.1f%%)", i+1, len(features), float64(i+1)*100/float64(len(features)))
+			lastUpdate = time.Now()
+		}
 	}
 	if originalArea <= 0 {
 		return nil, fmt.Errorf("source road mesh is empty")
 	}
+	indexStarted := time.Now()
+	meshIndex, err := newRoadMeshIndex(sourceMeshes)
+	if err != nil {
+		return nil, fmt.Errorf("index road meshes: %w", err)
+	}
+	log.Infof("Road mesh index: meshes=%d buildTime=%s", len(meshIndex.items), time.Since(indexStarted))
 	hashes, err := roadSliceTargetGeohashes(region, precision, opt.Geohashes)
 	if err != nil {
 		return nil, err
@@ -170,24 +185,44 @@ func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection
 		return nil, fmt.Errorf("road surface geohash slices: %w", err)
 	}
 	root := tilesetJSON{Asset: tilesetAsset{Version: "1.1"}, GeometricError: 100, Root: tilesetRoot{Refine: "ADD", GeometricError: 100}}
+	transform := cesium.GenerateTransformMatrixUP(base[0], base[1], base[2], 0)
+	root.Root.Transform = append([]float64(nil), transform[:]...)
+	hashStarted := time.Now()
+	var candidateMeshes int64
 	var outputMin, outputMax [3]float64
 	haveBounds := false
 	clippedArea := 0.0
 	tileCount := 0
 	splitRoad := false
 	roadTileCounts := make([]int, len(features))
-	for _, hash := range hashes {
+	for hi, hash := range hashes {
+		// Count all completed cells, including empty cells skipped by the index.
+		if hi > 0 && time.Since(lastUpdate) >= 500*time.Millisecond {
+			log.Infof("Hashes Progress: %d/%d (%.1f%%)", hi, len(hashes), float64(hi)*100/float64(len(hashes)))
+			lastUpdate = time.Now()
+		}
 		box := geohash.BoundingBox(hash)
 		boundary := roadSliceProjectedBoundary(frame, box, base[2])
+		candidates := meshIndex.query(boundary)
+		candidateMeshes += int64(len(candidates))
+		if len(candidates) == 0 {
+			continue
+		}
+		var localMin, localMax [3]float64
+		haveLocalBounds := false
 		doc := gltf.NewDocument()
 		tileRuntime, err := builder.newRuntime(doc)
 		if err != nil {
 			return nil, fmt.Errorf("road surface geohash slices: %w", err)
 		}
 		primitives := []*gltf.Primitive{}
-		for i, meshes := range sourceMeshes {
+		for candidate := 0; candidate < len(candidates); {
+			i := candidates[candidate].feature
 			clipped := []common.RoadSurfaceMesh{}
-			for _, mesh := range meshes {
+			for candidate < len(candidates) && candidates[candidate].feature == i {
+				ref := candidates[candidate]
+				candidate++
+				mesh := sourceMeshes[i][ref.mesh]
 				cut, err := common.ClipRoadSurfaceMesh(mesh, boundary)
 				if err != nil {
 					return nil, fmt.Errorf("road surface geohash slices: %w", err)
@@ -195,10 +230,22 @@ func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection
 				if len(cut.Indices) == 0 {
 					continue
 				}
-				if err := roadSliceCheckInside(cut, boundary); err != nil {
+				if err = roadSliceCheckInside(cut, boundary); err != nil {
 					return nil, err
 				}
 				clippedArea += roadSliceMeshArea(cut)
+				for _, point := range cut.Positions {
+					for axis := 0; axis < 3; axis++ {
+						value := float64(point[axis])
+						if !haveLocalBounds || value < localMin[axis] {
+							localMin[axis] = value
+						}
+						if !haveLocalBounds || value > localMax[axis] {
+							localMax[axis] = value
+						}
+					}
+					haveLocalBounds = true
+				}
 				clipped = append(clipped, cut)
 			}
 			if len(clipped) == 0 {
@@ -228,6 +275,9 @@ func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection
 		if err := CompactDocument(doc); err != nil {
 			return nil, fmt.Errorf("road surface geohash slices: %w", err)
 		}
+		if len(doc.Meshes) == 0 || doc.Extensions["EXT_structural_metadata"] == nil {
+			return nil, fmt.Errorf("missing geometry or feature metadata")
+		}
 		var buffer bytes.Buffer
 		encoder := gltf.NewEncoder(&buffer)
 		encoder.AsBinary = true
@@ -242,26 +292,9 @@ func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection
 		if err := os.WriteFile(glbPath, buffer.Bytes(), 0644); err != nil {
 			return nil, fmt.Errorf("road surface geohash slices: %w", err)
 		}
-		decoded, err := gltf.Open(glbPath)
-		if err != nil {
-			return nil, fmt.Errorf("road surface geohash slices: %w", err)
-		}
-		if len(decoded.Meshes) == 0 || decoded.Extensions["EXT_structural_metadata"] == nil {
-			return nil, fmt.Errorf("missing geometry or feature metadata")
-		}
-		contentURI := "tiles/" + hash + "/surface.glb"
-		leafJSON, err := BuildTilesetJSONForGLB(TilesetBuildOptions{GLBPath: glbPath, ContentURI: contentURI, BasePoint: base})
-		if err != nil {
-			return nil, fmt.Errorf("road surface geohash slices: %w", err)
-		}
-		var leaf tilesetJSON
-		if err := json.Unmarshal(leafJSON, &leaf); err != nil {
-			return nil, fmt.Errorf("road surface geohash slices: %w", err)
-		}
-		root.Root.Transform = leaf.Root.Transform
-		leaf.Root.Transform = nil
-		root.Root.Children = append(root.Root.Children, leaf.Root)
-		b := leaf.Root.BoundingVolume.Box
+		// Bounds come from the exact vertices written above; no GLB decode/readback is needed.
+		b := buildTilesetBox(localMin, localMax, TilesetBuildOptions{PaddingX: 5, PaddingZ: 5, PaddingY: 2, MinPaddingXZ: 12, MinPaddingY: 6, PaddingRatioXZ: .03, PaddingRatioY: .2})
+		root.Root.Children = append(root.Root.Children, tilesetRoot{BoundingVolume: tilesetBoundingVolume{Box: b}, Refine: "ADD", Content: &tilesetContent{URI: "tiles/" + hash + "/surface.glb"}})
 		for axis := 0; axis < 3; axis++ {
 			lo, hi := b[axis]-b[3+axis*4], b[axis]+b[3+axis*4]
 			if !haveBounds || lo < outputMin[axis] {
@@ -278,6 +311,10 @@ func BuildRoadSurfaceGeohashSlices(roads, centerlines *geojson.FeatureCollection
 		copy(tile.Transform[:], root.Root.Transform)
 		result.Tiles = append(result.Tiles, tile)
 	}
+	if len(hashes) > 0 {
+		log.Infof("Hashes Progress: %d/%d (100.0%%)", len(hashes), len(hashes))
+	}
+	log.Infof("Road slice candidates: %d/%d mesh-cell pairs; hashStageTime=%s", candidateMeshes, int64(len(meshIndex.items))*int64(len(hashes)), time.Since(hashStarted))
 	if tileCount == 0 && !opt.ModelsOnly {
 		return nil, fmt.Errorf("no nonempty road surface tiles generated")
 	}
