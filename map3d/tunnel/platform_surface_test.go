@@ -26,7 +26,7 @@ func TestPlatformSquareTiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if uv[0] != [2]float32{0, 2} || uv[1] != [2]float32{8, 2} || uv[2] != [2]float32{8, 4} {
+	if uv[0] != [2]float32{0, 0} || uv[1] != [2]float32{8, 0} || uv[2] != [2]float32{8, 2} {
 		t.Fatalf("not 0.5m square tiles: %v", uv)
 	}
 	if uv[1] != uv[4] || uv[2] != uv[7] {
@@ -136,5 +136,71 @@ func TestPlatformLongStripUsesLocalSegments(t *testing.T) {
 				t.Fatal("triangle spans unrelated sections")
 			}
 		}
+	}
+}
+
+func TestPlatformLeftEdgeZeroBothSides(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		line := &tunnelCenterline{points: [][3]float32{{0, 0, 0}, {20, 0, 0}}, stations: []float64{0, 20}}
+		if reverse {
+			line.points[0], line.points[1] = line.points[1], line.points[0]
+		}
+		for _, offset := range []float32{-6, 5} {
+			pos := [][3]float32{{0, 1, offset}, {10, 1, offset}, {10, 1, offset + 1}, {0, 1, offset + 1}}
+			doc := gltf.NewDocument()
+			p, err := TunnelPlatformMultiPolygonPrimitive(doc, [][][3]float32{pos}, "platform_top", 0, mgltf.UvsParams{}, TunnelPlatformOptions{Centerline: line, TileSize: 0.5})
+			if err != nil {
+				t.Fatal(err)
+			}
+			uv, err := modeler.ReadTextureCoord(doc, doc.Accessors[p.Attributes[gltf.TEXCOORD_0]], nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			left, right := []int{0, 1}, []int{2, 3}
+			if reverse {
+				left, right = right, left
+			}
+			for _, i := range left {
+				if uv[i][1] != 0 {
+					t.Fatalf("left edge not zero (reverse=%v offset=%v): %v", reverse, offset, uv)
+				}
+			}
+			for _, i := range right {
+				if math.Abs(float64(uv[i][1])-2) > 1e-6 {
+					t.Fatalf("wrong transverse repeat: %v", uv)
+				}
+			}
+		}
+	}
+}
+
+func TestPlatformVariableLeftEdgeContinuous(t *testing.T) {
+	line := &tunnelCenterline{points: [][3]float32{{0, 0, 0}, {20, 0, 0}}, stations: []float64{0, 20}}
+	polygons := [][][3]float32{
+		{{0, 1, 1}, {4, 1, 2}, {4, 1, 4}, {0, 1, 2}},
+		{{4, 1, 2}, {8, 1, 3}, {8, 1, 4.5}, {4, 1, 4}},
+	}
+	doc := gltf.NewDocument()
+	p, err := TunnelPlatformMultiPolygonPrimitive(doc, polygons, "platform_top", 0, mgltf.UvsParams{}, TunnelPlatformOptions{Centerline: line, TileSize: 0.5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uv, err := modeler.ReadTextureCoord(doc, doc.Accessors[p.Attributes[gltf.TEXCOORD_0]], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, i := range []int{0, 1, 4, 5} {
+		if uv[i][1] != 0 {
+			t.Fatalf("changing left edge must remain zero: %v", uv)
+		}
+	}
+	if uv[2] != uv[7] || uv[1] != uv[4] {
+		t.Fatalf("seam mismatch: %v", uv)
+	}
+	if uv[3][1] != 2 || uv[2][1] != 4 || uv[6][1] != 3 {
+		t.Fatalf("width normalized instead of meter tiling: %v", uv)
+	}
+	if uv[5][0] != 16 {
+		t.Fatal("longitudinal U changed")
 	}
 }

@@ -77,22 +77,8 @@ func TunnelPlatformMultiPolygonPrimitive(doc *gltf.Document, polygons [][][3]flo
 		for _, index := range local {
 			indices = append(indices, base+index)
 		}
-		if surfaceType == "platform_top" {
-			for _, p := range pos {
-				s, l := float64(p[0]), float64(p[2])
-				if opt.Centerline != nil {
-					s, l = opt.Centerline.coordinates(p)
-				}
-				u, v := float32(s/opt.TileSize), float32(l/opt.TileSize)
-				if params.FlipU {
-					u = -u
-				}
-				if params.FlipV {
-					v = -v
-				}
-				uv = append(uv, [2]float32{u, v})
-			}
-		} else if opt.Centerline != nil {
+
+		if surfaceType != "platform_top" && opt.Centerline != nil {
 			coords := tunnelWallUVs(pos, opt.Centerline, 1, 1)
 			for _, pair := range coords {
 				if params.FlipU {
@@ -107,6 +93,13 @@ func TunnelPlatformMultiPolygonPrimitive(doc *gltf.Document, polygons [][][3]flo
 	}
 	if len(indices) == 0 {
 		return nil, fmt.Errorf("empty platform primitive: %s", surfaceType)
+	}
+	if surfaceType == "platform_top" {
+		var err error
+		uv, err = platformTopUVs(positions, indices, opt, params)
+		if err != nil {
+			return nil, err
+		}
 	}
 	normals := GenerateSmoothNormalsByIndices(positions, indices)
 	if len(uv) == 0 {

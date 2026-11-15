@@ -80,12 +80,20 @@ func TestRepairedPlatformCenterlineUV(t *testing.T) {
 	if len(positions) != 5 || len(uv) != 5 {
 		t.Fatal("intersection missing from UV mesh")
 	}
+	hasZero := false
 	for i, pos := range positions {
-		s, l := line.coordinates(pos)
-		if uv[i] != [2]float32{float32(s / 0.5), float32(l / 0.5)} {
-			t.Fatal("intersection UV not aligned to centerline")
+		s, _ := line.coordinates(pos)
+		if uv[i][0] != float32(s/0.5) || uv[i][1] < 0 {
+			t.Fatal("intersection UV not aligned with platform reference")
+		}
+		if uv[i][1] == 0 {
+			hasZero = true
 		}
 	}
+	if !hasZero {
+		t.Fatal("left boundary does not start at zero")
+	}
+
 }
 
 func TestPlatformCrossingConfigurableTolerance(t *testing.T) {
