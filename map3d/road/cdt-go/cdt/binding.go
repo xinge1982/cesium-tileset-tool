@@ -3,6 +3,7 @@ package cdt
 import (
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -64,12 +65,25 @@ type CleanResult struct {
 func libraryPath() (string, error) {
 	switch runtime.GOOS {
 	case "windows":
-		return filepath.FromSlash("bin/cdt_bridge.dll"), nil
+		return resolveLibraryPath("cdt_bridge.dll"), nil
 	case "linux":
-		return filepath.FromSlash("bin/cdt_bridge.so"), nil
+		return resolveLibraryPath("cdt_bridge.so"), nil
 	default:
 		return "", fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
+}
+
+// Resolve the bundled library when the caller runs outside the binding directory.
+func resolveLibraryPath(name string) string {
+	relative := filepath.Join("bin", name)
+	if _, err := os.Stat(relative); err == nil {
+		return relative
+	}
+	_, file, _, ok := runtime.Caller(0)
+	if ok {
+		return filepath.Join(filepath.Dir(file), "bin", name)
+	}
+	return relative
 }
 
 func cString(ptr *byte) string {
