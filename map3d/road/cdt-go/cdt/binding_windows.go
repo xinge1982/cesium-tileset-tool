@@ -3,9 +3,11 @@
 package cdt
 
 import (
+	"debug/pe"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ebitengine/purego"
 	"golang.org/x/sys/windows"
@@ -30,9 +32,18 @@ func load() (*api, error) {
 		return nil, fmt.Errorf("dll not found: %s: %w", absPath, err)
 	}
 
-	handle, err := windows.LoadLibrary(absPath)
+	// 同时搜索库所在目录及系统默认目录，不修改进程工作目录或 PATH。
+	handle, err := windows.LoadLibraryEx(absPath, 0,
+		windows.LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|windows.LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)
 	if err != nil {
-		return nil, fmt.Errorf("LoadLibrary failed: %w", err)
+		imports := "unknown"
+		if file, openErr := pe.Open(absPath); openErr == nil {
+			if names, importErr := file.ImportedLibraries(); importErr == nil {
+				imports = strings.Join(names, ", ")
+			}
+			_ = file.Close()
+		}
+		return nil, fmt.Errorf("LoadLibraryEx failed for %s (DLL exists; direct dependencies: %s). Check matching x64 MinGW runtime DLLs, especially libwinpthread-1.dll; place them beside cdt_bridge.dll: %w", absPath, imports, err)
 	}
 
 	a := &api{handle: uintptr(handle)}

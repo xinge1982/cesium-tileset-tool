@@ -635,3 +635,17 @@ v.y = y;
 - `ebitengine/purego`
 
 请根据各自上游仓库的许可证要求进行分发和使用。
+
+## Windows：找不到指定的模块
+
+若错误出现在 `LoadLibrary`/`LoadLibraryEx`，而不是 `dll not found`，主 DLL 已存在，仍需检查依赖。仓库当前的 x64 `cdt_bridge.dll` 直接依赖：
+
+- KERNEL32.dll（系统库）
+- msvcrt.dll（系统库）
+- libwinpthread-1.dll（MinGW 运行库，仓库未附带）
+
+从构建该 DLL 所用的同一套 x64 MinGW 工具链 `bin` 目录，将 `libwinpthread-1.dll` 复制到 `map3d/road/cdt-go/cdt/bin/`，与 `cdt_bridge.dll` 同目录，再重新运行测试。若当前运行的是另一份 `cdt_bridge.dll`，将依赖放到错误消息显示的实际库目录。不要混用 x86 或其他工具链版本。
+
+Windows 加载器使用 `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`，因此会搜索主 DLL 所在目录，无需修改 GoLand 工作目录或全局 PATH。错误信息包含实际 DLL 路径及其直接依赖列表；依赖自身也可能有缺失项，可用 Dependencies 或同一工具链的 objdump 继续检查。
+
+`-static-libgcc -static-libstdc++` 并不保证 winpthread 静态链接；若需要仅分发一个 DLL，应在原生构建工程中额外配置线程运行库静态链接，并重新检查最终 DLL 的导入表。
