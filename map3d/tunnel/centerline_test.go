@@ -56,7 +56,7 @@ func TestTunnelCenterlineTileset(t *testing.T) {
 	dir := t.TempDir()
 	center := filepath.Join(dir, "center.geojson")
 	walls := filepath.Join(dir, "walls.geojson")
-	if err := os.WriteFile(center, []byte(`{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"group_id":7},"geometry":{"type":"LineString","coordinates":[[116,30,0],[116.001,30,0]]}}]}`), 0600); err != nil {
+	if err := os.WriteFile(center, []byte(`{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"group_id":7},"geometry":{"type":"MultiLineString","coordinates":[[[116,30,0],[116.0005,30,0]],[[116.0005,30,0],[116.001,30,0]]]}}]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	input := `{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"group_id":"7","surface_type":"left_wall"},"geometry":{"type":"Polygon","coordinates":[[[116,29.99999,0],[116.001,29.99999,0],[116.001,29.99999,2.5],[116,29.99999,2.5],[116,29.99999,0]]]}},{"type":"Feature","properties":{"group_id":"7","surface_type":"flat_roof","from_station":0,"to_station":100},"geometry":{"type":"Polygon","coordinates":[[[116,29.99999,2.5],[116.001,29.99999,2.5],[116.001,30.00001,2.5],[116,30.00001,2.5],[116,29.99999,2.5]]]}}]}`
@@ -147,5 +147,50 @@ func TestMergedRoofSectionUV(t *testing.T) {
 	}
 	if uv[0][1] != 0 || uv[4][1] != 0 || uv[1][1] != 2 || uv[3][1] != 2 || uv[2][1] != 5 {
 		t.Fatalf("merged UV %v", uv)
+	}
+}
+
+func TestMultiLineStringCenterline(t *testing.T) {
+	origin := []float64{116, 30, 0}
+	load := func(kind, coordinates string) (*tunnelCenterline, error) {
+		path := filepath.Join(t.TempDir(), "center.geojson")
+		data := `{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"group_id":"17"},"geometry":{"type":"` + kind + `","coordinates":` + coordinates + `}}]}`
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		refs, err := loadTunnelCenterlines(path, origin)
+		return refs["17"], err
+	}
+	line, err := load("LineString", `[[116,30,10],[116.001,30,11],[116.002,30.001,12]]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multi, err := load("MultiLineString", `[[[116,30,10],[116.001,30,11]],[[116.001,30,11],[116.002,30.001,12]]]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(line, multi) {
+		t.Fatal("split line changed points or mileage")
+	}
+	for _, p := range line.points {
+		s, l := line.coordinates(p)
+		ms, ml := multi.coordinates(p)
+		if s != ms || l != ml {
+			t.Fatal("split line changed UV coordinates")
+		}
+	}
+	if _, err = load("MultiLineString", `[[[116,30],[116.001,30]],[[116.001,30],[116.002,30]]]`); err != nil {
+		t.Fatal("XY lines", err)
+	}
+	for _, coordinates := range []string{
+		`[]`,
+		`[[[116,30],[116.001,30]],[[116.01,30],[116.02,30]]]`,
+		`[[[116,30],[116.001,30]],[[116.002,30],[116.001,30]]]`,
+		`[[[116,30],[116.001,30]],[[116.001,30],[116.002,30]],[[116.001,30],[116.001,30.001]]]`,
+		`[[[116,30,0],[116.001,30,0]],[[116.001,30,10],[116.002,30,10]]]`,
+	} {
+		if _, err = load("MultiLineString", coordinates); err == nil {
+			t.Fatalf("invalid multiline accepted: %s", coordinates)
+		}
 	}
 }

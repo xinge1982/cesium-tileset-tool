@@ -49,35 +49,25 @@ func loadTunnelCenterlines(path string, origin []float64) (map[string]*tunnelCen
 			return nil, fmt.Errorf("centerline feature %d: missing group_id", i)
 		}
 		if result[id] != nil {
-			return nil, fmt.Errorf("duplicate centerline group_id %s; use one continuous LineString per tunnel", id)
+			return nil, fmt.Errorf("duplicate centerline group_id %s; use one continuous LineString or MultiLineString per tunnel", id)
 		}
-		line, ok := f.Geometry.(*geom.LineString)
-		if !ok {
-			return nil, fmt.Errorf("centerline %s: expected LineString or LineStringZ", id)
+		points, err := tunnelCenterlinePoints(f.Geometry, origin)
+		if err != nil {
+			return nil, fmt.Errorf("centerline %s: %w", id, err)
 		}
 		ref := new(tunnelCenterline)
-		flat, stride := line.FlatCoords(), line.Stride()
-		for j := 0; j < len(flat); j += stride {
-			h := 0.0
-			if stride >= 3 {
-				h = flat[j+2]
-			}
-			if !isFinite(flat[j]) || !isFinite(flat[j+1]) || !isFinite(h) {
-				return nil, fmt.Errorf("centerline %s: nonfinite coordinate", id)
-			}
-			e, n, u := wgs84ToLocal(flat[j], flat[j+1], h, origin[0], origin[1], origin[2])
-			p := [3]float32{float32(e), float32(u), float32(-n)}
-			s := 0.0
+		for _, p := range points {
+			station := 0.0
 			if count := len(ref.points); count > 0 {
 				q := ref.points[count-1]
 				d := math.Hypot(float64(p[0])-float64(q[0]), float64(p[2])-float64(q[2]))
 				if d < 1e-6 {
 					continue
 				}
-				s = ref.stations[count-1] + d
+				station = ref.stations[count-1] + d
 			}
 			ref.points = append(ref.points, p)
-			ref.stations = append(ref.stations, s)
+			ref.stations = append(ref.stations, station)
 		}
 		if len(ref.points) < 2 {
 			return nil, fmt.Errorf("centerline %s: need two distinct horizontal points", id)
@@ -131,4 +121,79 @@ func tunnelWallUVs(pos [][3]float32, line *tunnelCenterline, repeatU, repeatV fl
 		uv[i] = [2]float32{float32(s / repeatU), float32(height / repeatV)}
 	}
 	return uv
+}
+
+// 按输入顺序和方向连接多段中线，仅接受首尾连续且无分叉的路径。
+func tunnelCenterlinePoints(g geom.T, origin []float64) ([][3]float32, error) {
+	var parts []*geom.LineString
+	switch line := g.(type) {
+	case *geom.LineString:
+		parts = append(parts, line)
+	case *geom.MultiLineString:
+		for i := 0; i < line.NumLineStrings(); i++ {
+			parts = append(parts, line.LineString(i))
+		}
+	default:
+		return nil, fmt.Errorf("expected LineString or MultiLineString (XY or XYZ)")
+	}
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("empty centerline")
+	}
+	converted := make([][][3]float32, 0, len(parts))
+	for i, part := range parts {
+		var points [][3]float32
+		flat, stride := part.FlatCoords(), part.Stride()
+		for j := 0; j < len(flat); j += stride {
+			h := 0.0
+			if stride >= 3 {
+				h = flat[j+2]
+			}
+			if !isFinite(flat[j]) || !isFinite(flat[j+1]) || !isFinite(h) {
+				return nil, fmt.Errorf("part %d: nonfinite coordinate", i)
+			}
+			e, n, u := wgs84ToLocal(flat[j], flat[j+1], h, origin[0], origin[1], origin[2])
+			p := [3]float32{float32(e), float32(u), float32(-n)}
+			if len(points) == 0 || p != points[len(points)-1] {
+				points = append(points, p)
+			}
+		}
+		if len(points) < 2 {
+			return nil, fmt.Errorf("part %d: need at least two distinct points", i)
+		}
+		converted = append(converted, points)
+	}
+	// 使用同一个米制 ENU 空间检查接缝，包含高度以免跨层误接。
+	close := func(a, b [3]float32) bool {
+		dx, dy, dz := float64(a[0])-float64(b[0]), float64(a[1])-float64(b[1]), float64(a[2])-float64(b[2])
+		return dx*dx+dy*dy+dz*dz <= 0.02*0.02
+	}
+	if len(converted) > 1 {
+		for i, part := range converted {
+			for _, end := range [][3]float32{part[0], part[len(part)-1]} {
+				count := 0
+				for _, other := range converted {
+					if close(end, other[0]) {
+						count++
+					}
+					if close(end, other[len(other)-1]) {
+						count++
+					}
+				}
+				if count > 2 {
+					return nil, fmt.Errorf("part %d: branching or ambiguous endpoints", i)
+				}
+			}
+		}
+	}
+	result := append([][3]float32(nil), converted[0]...)
+	for i := 1; i < len(converted); i++ {
+		if !close(result[len(result)-1], converted[i][0]) {
+			return nil, fmt.Errorf("part %d does not continue the previous part within 0.02 m; order parts along the tunnel and keep their directions consistent", i)
+		}
+		result = append(result, converted[i][1:]...)
+	}
+	if len(converted) > 1 && close(result[0], result[len(result)-1]) {
+		return nil, fmt.Errorf("closed MultiLineString has no unambiguous tunnel start")
+	}
+	return result, nil
 }
