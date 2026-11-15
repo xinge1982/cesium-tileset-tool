@@ -86,7 +86,7 @@ func TestRoadWallBuildLine(t *testing.T) {
 	for _, gs := range files {
 		err := generateTunnelWallGlbTileset(t, outPath, gs)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("failed to generate tileset %s: %s", gs, err.Error())
 		}
 	}
 }
