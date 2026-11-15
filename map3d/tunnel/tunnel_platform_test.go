@@ -163,6 +163,7 @@ func generateTunnelPlatformGlbTileset(t *testing.T, outPath, geojsonPath string)
 		}
 	}
 	references := make(map[string]*tunnelCenterline)
+	sources := make(map[string][]int)
 	// 显式重复采样，使超过 0～1 的米制 UV 继续平铺。
 	sampler := len(doc.Samplers)
 	doc.Samplers = append(doc.Samplers, &gltf.Sampler{WrapS: gltf.WrapRepeat, WrapT: gltf.WrapRepeat})
@@ -233,6 +234,7 @@ func generateTunnelPlatformGlbTileset(t *testing.T, outPath, geojsonPath string)
 		}
 
 		groups[key].Polygons = append(groups[key].Polygons, pos)
+		sources[key] = append(sources[key], i)
 	}
 
 	var primitives []*gltf.Primitive
@@ -250,7 +252,9 @@ func generateTunnelPlatformGlbTileset(t *testing.T, outPath, geojsonPath string)
 			group.SurfaceType,
 			group.Material,
 			mgltf.UvsParams{RepeatX: 1, RepeatY: 1},
-			TunnelPlatformOptions{Centerline: references[key], TileSize: tileSize},
+			TunnelPlatformOptions{Centerline: references[key], TileSize: tileSize, SourceFeatures: sources[key], OnRepair: func(feature int) {
+				t.Logf("repaired self-crossing platform_top source feature %d: split at intersection (edge separation <= 0.005 m)", feature)
+			}},
 		)
 		if errT != nil {
 			return fmt.Errorf("primitive %s/%s: %v", group.Side, group.SurfaceType, errT)

@@ -9,7 +9,9 @@ import (
 )
 
 type TunnelPlatformOptions struct {
-	Centerline *tunnelCenterline
+	Centerline     *tunnelCenterline
+	SourceFeatures []int
+	OnRepair       func(int)
 	// TileSize 是 platform_top 一张完整方砖贴图对应的边长，单位米。
 	TileSize float64
 }
@@ -37,7 +39,23 @@ func TunnelPlatformMultiPolygonPrimitive(doc *gltf.Document, polygons [][][3]flo
 		}
 		var local []uint32
 		var err error
-		if surfaceType == "platform_inner_wall" || surfaceType == "platform_outer_wall" {
+		feature := polygonIndex
+		if polygonIndex < len(opt.SourceFeatures) {
+			feature = opt.SourceFeatures[polygonIndex]
+		}
+		repaired := false
+		if surfaceType == "platform_top" {
+			pos, local, repaired, err = repairPlatformTopCrossing(pos)
+			if err != nil {
+				return nil, fmt.Errorf("platform polygon %d (source feature %d): %w", polygonIndex, feature, err)
+			}
+			if repaired && opt.OnRepair != nil {
+				opt.OnRepair(feature)
+			}
+		}
+		if repaired {
+			// 交叉顶面已拆成简单面并完成 CDT。
+		} else if surfaceType == "platform_inner_wall" || surfaceType == "platform_outer_wall" {
 			local, err = triangulateTunnelWallCDT(pos)
 		} else if surfaceType == "platform_top" && opt.Centerline != nil {
 			local, err = triangulatePlatformStripCDT(pos, opt.Centerline)
@@ -45,7 +63,7 @@ func TunnelPlatformMultiPolygonPrimitive(doc *gltf.Document, polygons [][][3]flo
 			local, err = mgltf.CDTRingKeepWinding(pos)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("platform polygon %d: %w", polygonIndex, err)
+			return nil, fmt.Errorf("platform polygon %d (source feature %d): %w", polygonIndex, feature, err)
 		}
 		base := uint32(len(positions))
 		positions = append(positions, pos...)
