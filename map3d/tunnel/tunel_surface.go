@@ -28,7 +28,7 @@ func TunnelWallPrimitive(
 	params mgltf.UvsParams,
 ) (*gltf.Primitive, error) {
 
-	indices, err := mgltf.CDTRingKeepWinding(pos)
+	indices, err := triangulateTunnelWallCDT(pos)
 	if err != nil {
 		return nil, err
 	}

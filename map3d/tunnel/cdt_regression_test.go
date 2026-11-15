@@ -47,7 +47,13 @@ func TestTunnelCDTFixtures(t *testing.T) {
 					t.Logf("skip degenerate feature %d", i)
 					continue
 				}
-				indices, err := mgltf.CDTRingKeepWinding(pos)
+				var indices []uint32
+				surfaceType, _ := f.Properties["surface_type"].(string)
+				if surfaceType == "left_wall" || surfaceType == "right_wall" {
+					indices, err = triangulateTunnelWallCDT(pos)
+				} else {
+					indices, err = mgltf.CDTRingKeepWinding(pos)
+				}
 				if err != nil {
 					t.Fatalf("feature %d (%v): %v", i, f.Properties["surface_type"], err)
 				}
