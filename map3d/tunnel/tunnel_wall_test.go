@@ -227,6 +227,7 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 
 		pos = normalizeClosedRing3D(pos)
 		if len(pos) < 3 {
+			t.Logf("skip degenerate feature %d (%v): fewer than three distinct consecutive vertices", i, fc.Features[i].Properties["surface_type"])
 			continue
 		}
 
@@ -271,7 +272,11 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 			width := utils.ToFloat64(fc.Features[i].Properties["sign_width"])
 			height := utils.ToFloat64(fc.Features[i].Properties["sign_height"])
 
-			signMaterialIdx, errM := addSignNameMaterial(t, doc, width, height, tunnelName, "./assets/simkai.ttf")
+			fontPath := os.Getenv("MAP3D_TUNNEL_SIGN_FONT")
+			if fontPath == "" {
+				fontPath = "./assets/simkai.ttf"
+			}
+			signMaterialIdx, errM := addSignNameMaterial(t, doc, width, height, tunnelName, fontPath)
 			if errM != nil {
 				return errM
 			}

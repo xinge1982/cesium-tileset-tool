@@ -43,11 +43,24 @@ func TestTunnelCDTFixtures(t *testing.T) {
 					pos = append(pos, [3]float32{float32(e), float32(u), float32(-n)})
 				}
 				pos = normalizeClosedRing3D(pos)
+				if len(pos) < 3 {
+					t.Logf("skip degenerate feature %d", i)
+					continue
+				}
 				indices, err := mgltf.CDTRingKeepWinding(pos)
 				if err != nil {
 					t.Fatalf("feature %d (%v): %v", i, f.Properties["surface_type"], err)
 				}
-				if len(indices) != (len(pos)-2)*3 {
+				uniqueCount := 0
+				for j, p := range pos {
+					if j == 0 || p != pos[j-1] {
+						uniqueCount++
+					}
+				}
+				if len(pos) > 1 && pos[0] == pos[len(pos)-1] {
+					uniqueCount--
+				}
+				if len(indices) != (uniqueCount-2)*3 {
 					t.Fatalf("feature %d triangle count %d", i, len(indices)/3)
 				}
 			}

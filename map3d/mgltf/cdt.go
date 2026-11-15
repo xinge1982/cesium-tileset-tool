@@ -10,6 +10,32 @@ import (
 // The returned indices address the supplied positions, including when the ring is closed.
 // Nonplanar rings retain their original elevations; no height reconstruction is performed.
 func CDTRingKeepWinding(pos [][3]float32) ([]uint32, error) {
+	// 仅移除三维坐标完全一致的相邻点，不合并仅在投影中重合的点。
+	ring := make([][3]float32, 0, len(pos))
+	original := make([]uint32, 0, len(pos))
+	for i, p := range pos {
+		if len(ring) > 0 && p == ring[len(ring)-1] {
+			continue
+		}
+		ring = append(ring, p)
+		original = append(original, uint32(i))
+	}
+	for len(ring) > 1 && ring[0] == ring[len(ring)-1] {
+		ring = ring[:len(ring)-1]
+		original = original[:len(original)-1]
+	}
+	indices, err := cdtUniqueRingKeepWinding(ring)
+	if err != nil {
+		return nil, err
+	}
+	for i, index := range indices {
+		indices[i] = original[index]
+	}
+	return indices, nil
+}
+
+// Triangulate distinct boundary vertices before remapping to the caller's array.
+func cdtUniqueRingKeepWinding(pos [][3]float32) ([]uint32, error) {
 	n := len(pos)
 	if n > 1 && pos[0] == pos[n-1] {
 		n--

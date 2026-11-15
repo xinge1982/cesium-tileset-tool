@@ -324,6 +324,13 @@ func (w *VertexWelder) Add(p [3]float32, positions *[][3]float32) uint32 {
 }
 
 func normalizeClosedRing3D(pos [][3]float32) [][3]float32 {
+	clean := make([][3]float32, 0, len(pos))
+	for _, p := range pos {
+		if len(clean) == 0 || p != clean[len(clean)-1] {
+			clean = append(clean, p)
+		}
+	}
+	pos = clean
 	if len(pos) < 2 {
 		return pos
 	}
