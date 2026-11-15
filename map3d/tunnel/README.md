@@ -62,3 +62,27 @@ $env:MAP3D_TUNNEL_TEXTURE_REPEAT_V = "1"   # 横向每 1 米重复一次
 ```
 
 Feature 放在原有 FeatureCollection 中即可。空分段、断开的分段、反向/乱序接缝、分叉端点和闭合多段中线会报错，避免错误连接或里程跳变。
+
+## 两侧平台
+
+上传的平台生成测试已整合为 `TestRoadPlatformBuildLine`：
+
+```powershell
+$env:MAP3D_TUNNEL_PLATFORM_INPUT = "D:\data\platform"
+$env:MAP3D_TUNNEL_PLATFORM_OUTPUT = "D:\output\platform_tileset"
+$env:MAP3D_TUNNEL_CENTERLINE = "D:\data\tunnel_centerlines.geojson"
+$env:MAP3D_TUNNEL_PLATFORM_TOP_TEXTURE = "D:\textures\square_tile.jpg"
+$env:MAP3D_TUNNEL_PLATFORM_WALL_TEXTURE = "D:\textures\platform_wall.jpg"
+$env:MAP3D_TUNNEL_PLATFORM_TILE_SIZE = "0.5"
+go test ./map3d/tunnel -run '^TestRoadPlatformBuildLine$' -count=1 -v
+```
+
+输入支持单个 GeoJSON 文件或目录；每个文件输出独立 GLB 和 tileset。未指定输入时跳过，未指定输出时使用临时目录。沿用墙面的中线配置和 `group_id` 匹配规则，支持连续有序的 MultiLineString。面按 `group_id`、`side`、`surface_type` 分组，避免不同隧道合并。仅接受单外环 Polygon，孔洞和 MultiPolygon 会明确报错。
+
+所有平台面使用 CDT，保留原始三维坐标与绕序。内外侧壁采用与墙面相同的上下边界局部分片；顶面在能识别中线同里程的两侧边界配对时，也按相邻断面局部分片，其他形状使用通用 CDT。此过程不会按中线移动或重新采样输入模型。
+
+`platform_top` 的 UV 为 `U=中线水平里程/TileSize`、`V=中线有符号横向距离/TileSize`，跨平台片段连续累计，显式启用 REPEAT 采样。默认 TileSize 为 0.5 米，即一张完整贴图对应水平投影中的 0.5×0.5 米，不会将整个长条压缩成一张图片。若图片中包含多块砖，参数表示整张图片覆盖的尺寸，而不是单块砖的尺寸。弯道内外侧长度不同，按中心线坐标铺贴会随弯道产生一定形变。
+
+侧壁 U 沿中线里程、V 相对墙底高度，默认每米重复一次；洞口式端面等非配对立面以面最低高度为 V 原点。未指定中线时，顶面按局部 XZ 米制坐标平铺，侧面保留原有条带投影。平台顶面和侧面贴图独立配置。
+
+回归测试验证方砖纵横比例、片段接缝连续、局部 CDT 索引、独立贴图、REPEAT 采样、MultiLineString 中线生成完整 tileset，以及缺少匹配编号或非法砖尺寸时报错。当前未提供真实平台 GeoJSON，完整导出使用合成平台验证。
