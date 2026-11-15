@@ -52,3 +52,36 @@ func TestCDTRingKeepWinding(t *testing.T) {
 		t.Fatal("expected degenerate error")
 	}
 }
+
+func TestCDTRingConsecutiveDuplicates(t *testing.T) {
+	pos := [][3]float32{{0, 0, 0}, {4, 0, 0}, {4, 0, 0}, {4, 3, 0}, {0, 3, 0}, {0, 3, 0}, {0, 0, 0}, {0, 0, 0}}
+	before := append([][3]float32(nil), pos...)
+	indices, err := CDTRingKeepWinding(pos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indices) != 6 {
+		t.Fatalf("indices: %v", indices)
+	}
+	var area float32
+	for i := 0; i < len(indices); i += 3 {
+		a, b, c := pos[indices[i]], pos[indices[i+1]], pos[indices[i+2]]
+		cross := (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
+		if cross <= 0 {
+			t.Fatal("winding or area invalid")
+		}
+		area += cross / 2
+	}
+	if area != 12 {
+		t.Fatalf("area %v", area)
+	}
+	for i := range pos {
+		if pos[i] != before[i] {
+			t.Fatal("input changed")
+		}
+	}
+	// Distinct 3D points that coincide in the chosen projection must remain errors.
+	if _, err := CDTRingKeepWinding([][3]float32{{0, 0, 0}, {4, 0, 0}, {4, 0, 1}, {4, 3, 0}, {0, 3, 0}}); err == nil {
+		t.Fatal("projection overlap was silently removed")
+	}
+}
