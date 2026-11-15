@@ -15,6 +15,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/qmuntal/gltf"
@@ -149,6 +150,23 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 	t.Logf("box: %.8f, %.8f,%.8f, %.8f", minLon, minLat, maxLon, maxLat)
 	t.Logf("origin lon/lat/h: %.8f, %.8f, %.3f", originLon, originLat, originH)
 
+	var centerlines map[string]*tunnelCenterline
+	repeatU, repeatV := 1.0, 1.0
+	for name, target := range map[string]*float64{"MAP3D_TUNNEL_TEXTURE_REPEAT_U": &repeatU, "MAP3D_TUNNEL_TEXTURE_REPEAT_V": &repeatV} {
+		if value := os.Getenv(name); value != "" {
+			parsed, parseErr := strconv.ParseFloat(value, 64)
+			if parseErr != nil || !isFinite(parsed) || parsed <= 0 {
+				return fmt.Errorf("%s must be a positive number in meters", name)
+			}
+			*target = parsed
+		}
+	}
+	if path := os.Getenv("MAP3D_TUNNEL_CENTERLINE"); path != "" {
+		centerlines, err = loadTunnelCenterlines(path, []float64{originLon, originLat, originH})
+		if err != nil {
+			return fmt.Errorf("centerline: %w", err)
+		}
+	}
 	doc := gltf.NewDocument()
 
 	//贴图
@@ -197,6 +215,9 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 	var roofIndices []uint32
 	roofWeld := NewVertexWelder(0.005) // 5mm 容差，可改 0.01
 
+	roofSections := make(roofSectionGraph)
+	var roofCenterUVs [][2]float32
+	roofWelders := make(map[string]*VertexWelder)
 	for i := range fc.Features {
 		g := fc.Features[i].Geometry
 		switch polygon := g.(type) {
@@ -225,6 +246,7 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 			pos = append(pos, [3]float32{float32(e), float32(u), float32(-n)})
 		}
 
+		sourceRing := pos
 		pos = normalizeClosedRing3D(pos)
 		if len(pos) < 3 {
 			t.Logf("skip degenerate feature %d (%v): fewer than three distinct consecutive vertices", i, fc.Features[i].Properties["surface_type"])
@@ -232,18 +254,50 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 		}
 
 		surfaceType, _ := fc.Features[i].Properties["surface_type"].(string)
+		var reference *tunnelCenterline
+		groupID := tunnelGroupID(fc.Features[i].Properties["group_id"])
+		if centerlines != nil && (surfaceType == "left_wall" || surfaceType == "right_wall" || surfaceType == "arched_roof" || surfaceType == "flat_roof") {
+			reference = centerlines[groupID]
+			if reference == nil {
+				return fmt.Errorf("feature %d: no centerline for group_id %q", i, groupID)
+			}
+		}
 
 		if surfaceType == "arched_roof" || surfaceType == "flat_roof" {
 			localIndices, err := mgltf.CDTRingKeepWinding(pos)
 			if err != nil {
 				return fmt.Errorf("roof feature %d: %w", i, err)
 			}
+			welder := roofWeld
+			if reference != nil {
+				if roofWelders[groupID] == nil {
+					roofWelders[groupID] = NewVertexWelder(0.005)
+				}
+				welder = roofWelders[groupID]
+			}
 			localToGlobal := make([]uint32, len(pos))
 			for k, p := range pos {
-				idx := roofWeld.Add(p, &roofPositions)
+				idx := welder.Add(p, &roofPositions)
+				if reference != nil && int(idx) == len(roofCenterUVs) {
+					s, l := reference.coordinates(p)
+					roofCenterUVs = append(roofCenterUVs, [2]float32{float32(s / repeatU), float32(l / repeatV)})
+				}
 				localToGlobal[k] = idx
 			}
 
+			if reference != nil {
+				sectionIDs := localToGlobal
+				ordered := fc.Features[i].Properties["from_station"] != nil && fc.Features[i].Properties["to_station"] != nil
+				if ordered && len(sourceRing) == 5 && sourceRing[0] == sourceRing[4] {
+					sectionIDs = make([]uint32, 4)
+					for j, p := range sourceRing[:4] {
+						sectionIDs[j] = welder.Add(p, &roofPositions)
+					}
+				}
+				if err := roofSections.addQuad(sectionIDs, roofPositions, reference, ordered); err != nil {
+					return fmt.Errorf("roof feature %d UV: %w", i, err)
+				}
+			}
 			for _, idx := range localIndices {
 				roofIndices = append(roofIndices, localToGlobal[idx])
 			}
@@ -253,6 +307,9 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 			face, err := TunnelWallPrimitive(doc, pos, surfaceType, wallIdx, mgltf.UvsParams{RepeatX: 1, RepeatY: 1})
 			if err != nil {
 				return fmt.Errorf("%s feature %d: %w", surfaceType, i, err)
+			}
+			if reference != nil {
+				face.Attributes[gltf.TEXCOORD_0] = modeler.WriteTextureCoord(doc, tunnelWallUVs(pos, reference, repeatU, repeatV))
 			}
 			primitives = append(primitives, face)
 			continue
@@ -309,6 +366,12 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 			v := p[1] / tileSize // Y, or p[2] if Z is your depth axis
 
 			roofUVs[i] = [2]float32{u, v}
+		}
+		if centerlines != nil {
+			if err := roofSections.apply(roofCenterUVs, repeatV); err != nil {
+				return err
+			}
+			roofUVs = roofCenterUVs
 		}
 		roofPrim := &gltf.Primitive{
 			Attributes: gltf.PrimitiveAttributes{
