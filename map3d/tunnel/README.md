@@ -6,6 +6,7 @@
 $env:MAP3D_TUNNEL_INPUT = "D:\data\tunnel_walls"
 $env:MAP3D_TUNNEL_OUTPUT = "D:\output\tunnel_tileset"
 $env:MAP3D_TUNNEL_WALL_TEXTURE = "D:\textures\wall.jpg"
+$env:MAP3D_TUNNEL_ROOF_TEXTURE = "D:\textures\roof.jpg"
 # 存在 portal_wall 时设置：
 $env:MAP3D_TUNNEL_PORTAL_TEXTURE = "D:\textures\portal.png"
 go test ./map3d/tunnel -run '^TestRoadWallBuildLine$' -count=1 -v
@@ -18,3 +19,5 @@ CDT 将各个面投影到其面积法线对应的主平面，并将结果索引�
 每个墙面独立剖分，曲面墙使用面积加权顶点法线；拱顶各片剖分后保留原有顶点焊接和平滑法线处理。
 
 `MAP3D_TUNNEL_FIXTURES` 指定包含 tunnel_*_walls.geojson 的目录，可运行 `TestTunnelCDTFixtures` 检查实际输入。`map3d/mgltf` 中的确定性单元测试覆盖三个投影方向、反向绕序、凹多边形、闭合环、面积及退化输入。
+
+贴图按面类型分配：`left_wall`、`right_wall` 使用 `MAP3D_TUNNEL_WALL_TEXTURE`；`arched_roof`、`flat_roof` 使用 `MAP3D_TUNNEL_ROOF_TEXTURE`。未配置 roof 时复用 wall 材质，洞口仍使用独立的 portal 贴图。

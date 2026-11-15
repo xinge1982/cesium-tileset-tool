@@ -161,6 +161,21 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 		t.Fatal(err)
 	}
 
+	// 拱顶和平顶可单独配置贴图，未设置时复用墙面材质。
+	roofIdx := wallIdx
+	if roofImg := os.Getenv("MAP3D_TUNNEL_ROOF_TEXTURE"); roofImg != "" {
+		for _, feature := range fc.Features {
+			surfaceType, _ := feature.Properties["surface_type"].(string)
+			if surfaceType == "arched_roof" || surfaceType == "flat_roof" {
+				roofIdx, err = addWallMaterial(t, roofImg, doc, false)
+				if err != nil {
+					return fmt.Errorf("roof texture: %w", err)
+				}
+				break
+			}
+		}
+	}
+
 	portalIdx := -1
 	for _, feature := range fc.Features {
 		if feature.Properties["surface_type"] == "portal_wall" {
@@ -297,7 +312,7 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 				gltf.TEXCOORD_0: modeler.WriteTextureCoord(doc, roofUVs),
 			},
 			Indices:  gltf.Index(modeler.WriteIndices(doc, roofIndices)),
-			Material: gltf.Index(wallIdx),
+			Material: gltf.Index(roofIdx),
 		}
 
 		primitives = append(primitives, roofPrim)
