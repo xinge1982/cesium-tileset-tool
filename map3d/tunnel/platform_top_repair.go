@@ -10,6 +10,14 @@ import (
 // 仅允许交叉边的三维间距不超过 5 毫米，交点取两条边插值点的中点。
 // 原始顶点保持不动；其余自交情况仍交由 CDT 明确报错。
 func repairPlatformTopCrossing(pos [][3]float32) ([][3]float32, []uint32, bool, error) {
+	return repairPlatformTopCrossingWithTolerance(pos, 0.005)
+}
+
+// 使用调用者明确指定的米制容差修复交叉，保留默认 5 毫米的入口行为。
+func repairPlatformTopCrossingWithTolerance(pos [][3]float32, tolerance float64) ([][3]float32, []uint32, bool, error) {
+	if !isFinite(tolerance) || tolerance <= 0 {
+		return nil, nil, false, fmt.Errorf("platform repair tolerance must be positive meters")
+	}
 	if len(pos) != 4 {
 		return pos, nil, false, nil
 	}
@@ -35,8 +43,8 @@ func repairPlatformTopCrossing(pos [][3]float32) ([][3]float32, []uint32, bool, 
 			separation += (p - q) * (p - q)
 			intersection[axis] = float32((p + q) / 2)
 		}
-		if math.Sqrt(separation) > 0.005 {
-			return nil, nil, false, fmt.Errorf("self-crossing platform has %.6f m edge separation at crossing, exceeding 0.005 m repair tolerance", math.Sqrt(separation))
+		if math.Sqrt(separation) > tolerance {
+			return nil, nil, false, fmt.Errorf("self-crossing platform has %.6f m edge separation at crossing, exceeding %.6f m repair tolerance (MAP3D_TUNNEL_PLATFORM_REPAIR_TOLERANCE)", math.Sqrt(separation), tolerance)
 		}
 		output := append(append([][3]float32(nil), pos...), intersection)
 		// 输入顶面的净有向面积决定法线方向；两片都保持该方向。

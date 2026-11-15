@@ -162,6 +162,13 @@ func generateTunnelPlatformGlbTileset(t *testing.T, outPath, geojsonPath string)
 			return fmt.Errorf("MAP3D_TUNNEL_PLATFORM_TILE_SIZE must be positive meters")
 		}
 	}
+	repairTolerance := 0.005
+	if value := os.Getenv("MAP3D_TUNNEL_PLATFORM_REPAIR_TOLERANCE"); value != "" {
+		repairTolerance, err = strconv.ParseFloat(value, 64)
+		if err != nil || !isFinite(repairTolerance) || repairTolerance <= 0 {
+			return fmt.Errorf("MAP3D_TUNNEL_PLATFORM_REPAIR_TOLERANCE must be positive meters")
+		}
+	}
 	references := make(map[string]*tunnelCenterline)
 	sources := make(map[string][]int)
 	// 显式重复采样，使超过 0～1 的米制 UV 继续平铺。
@@ -252,8 +259,8 @@ func generateTunnelPlatformGlbTileset(t *testing.T, outPath, geojsonPath string)
 			group.SurfaceType,
 			group.Material,
 			mgltf.UvsParams{RepeatX: 1, RepeatY: 1},
-			TunnelPlatformOptions{Centerline: references[key], TileSize: tileSize, SourceFeatures: sources[key], OnRepair: func(feature int) {
-				t.Logf("repaired self-crossing platform_top source feature %d: split at intersection (edge separation <= 0.005 m)", feature)
+			TunnelPlatformOptions{Centerline: references[key], TileSize: tileSize, RepairTolerance: repairTolerance, SourceFeatures: sources[key], OnRepair: func(feature int) {
+				t.Logf("repaired self-crossing platform_top source feature %d: split at intersection (edge separation <= %.6f m)", feature, repairTolerance)
 			}},
 		)
 		if errT != nil {

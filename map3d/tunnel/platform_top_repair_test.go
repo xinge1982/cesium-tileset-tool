@@ -4,6 +4,7 @@ import (
 	"cesium-tileset-tool/map3d/mgltf"
 	"github.com/qmuntal/gltf"
 	"github.com/qmuntal/gltf/modeler"
+	"math"
 	"strings"
 	"testing"
 )
@@ -83,6 +84,28 @@ func TestRepairedPlatformCenterlineUV(t *testing.T) {
 		s, l := line.coordinates(pos)
 		if uv[i] != [2]float32{float32(s / 0.5), float32(l / 0.5)} {
 			t.Fatal("intersection UV not aligned to centerline")
+		}
+	}
+}
+
+func TestPlatformCrossingConfigurableTolerance(t *testing.T) {
+	input := crossingPlatformFixture()
+	input[1][1] = -0.010925293
+	input[2][1] = -0.010925293
+	if _, _, _, err := repairPlatformTopCrossing(input); err == nil {
+		t.Fatal("default 5mm tolerance changed")
+	}
+	positions, indices, repaired, err := repairPlatformTopCrossingWithTolerance(input, 0.012)
+	if err != nil || !repaired || len(positions) != 5 || len(indices) != 6 {
+		t.Fatalf("12mm repair failed: %v", err)
+	}
+	doc := gltf.NewDocument()
+	if _, err := TunnelPlatformMultiPolygonPrimitive(doc, [][][3]float32{input}, "platform_top", 0, mgltf.UvsParams{}, TunnelPlatformOptions{TileSize: 0.5, RepairTolerance: 0.012}); err != nil {
+		t.Fatal("primitive did not use configured tolerance", err)
+	}
+	for _, tolerance := range []float64{-1, math.NaN(), math.Inf(1)} {
+		if _, _, _, err := repairPlatformTopCrossingWithTolerance(input, tolerance); err == nil {
+			t.Fatal("invalid tolerance accepted")
 		}
 	}
 }

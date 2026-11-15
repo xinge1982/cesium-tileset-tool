@@ -9,9 +9,10 @@ import (
 )
 
 type TunnelPlatformOptions struct {
-	Centerline     *tunnelCenterline
-	SourceFeatures []int
-	OnRepair       func(int)
+	Centerline      *tunnelCenterline
+	SourceFeatures  []int
+	RepairTolerance float64
+	OnRepair        func(int)
 	// TileSize 是 platform_top 一张完整方砖贴图对应的边长，单位米。
 	TileSize float64
 }
@@ -25,6 +26,12 @@ func TunnelPlatformMultiPolygonPrimitive(doc *gltf.Document, polygons [][][3]flo
 		if opt.TileSize == 0 {
 			opt.TileSize = 0.5
 		}
+	}
+	if opt.RepairTolerance == 0 {
+		opt.RepairTolerance = 0.005
+	}
+	if !isFinite(opt.RepairTolerance) || opt.RepairTolerance <= 0 {
+		return nil, fmt.Errorf("platform repair tolerance must be positive meters")
 	}
 	if !isFinite(opt.TileSize) || opt.TileSize <= 0 {
 		return nil, fmt.Errorf("platform tile size must be positive meters")
@@ -45,7 +52,7 @@ func TunnelPlatformMultiPolygonPrimitive(doc *gltf.Document, polygons [][][3]flo
 		}
 		repaired := false
 		if surfaceType == "platform_top" {
-			pos, local, repaired, err = repairPlatformTopCrossing(pos)
+			pos, local, repaired, err = repairPlatformTopCrossingWithTolerance(pos, opt.RepairTolerance)
 			if err != nil {
 				return nil, fmt.Errorf("platform polygon %d (source feature %d): %w", polygonIndex, feature, err)
 			}
