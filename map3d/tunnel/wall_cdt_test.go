@@ -78,3 +78,66 @@ func TestUnpairedTunnelWallCDTFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestSubmillimeterWallSectionProjection(t *testing.T) {
+	pos := [][3]float32{{0, 0, 0}, {0, 0, 0.00004}, {0.00012, 2.5, 0.00004}, {0, 2.5, 0}}
+	if _, err := mgltf.CDTRingKeepWinding(pos); err == nil {
+		t.Fatal("fixture must reproduce dominant-plane collapse")
+	}
+	for _, reverse := range []bool{false, true} {
+		ring := append([][3]float32(nil), pos...)
+		if reverse {
+			for i, j := 0, len(ring)-1; i < j; i, j = i+1, j-1 {
+				ring[i], ring[j] = ring[j], ring[i]
+			}
+		}
+		before := append([][3]float32(nil), ring...)
+		indices, err := triangulateTunnelWallCDT(ring)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(indices) != 6 {
+			t.Fatal(indices)
+		}
+		used := make(map[uint32]bool)
+		for _, i := range indices {
+			used[i] = true
+		}
+		if len(used) != 4 {
+			t.Fatal("short wall section was discarded")
+		}
+		for i := range ring {
+			if ring[i] != before[i] {
+				t.Fatal("original geometry changed")
+			}
+		}
+	}
+}
+
+func TestWallQuadOneCollapsedEdge(t *testing.T) {
+	pos := [][3]float32{{0, 0, 0}, {0, 0, 0}, {0.00012, 2.5, 0.00004}, {0, 2.5, 0}}
+	indices, err := triangulateTunnelWallCDT(pos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indices) != 3 {
+		t.Fatalf("want one nonzero triangle, got %v", indices)
+	}
+}
+
+func TestShortRoofQuadUnfolding(t *testing.T) {
+	pos := [][3]float32{{0, 0, 0}, {0, 0, 0.00004}, {0.00012, 2.5, 0.00004}, {0, 2.5, 0}}
+	before := append([][3]float32(nil), pos...)
+	indices, err := triangulateRoofSectionQuad(pos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indices) != 6 {
+		t.Fatal(indices)
+	}
+	for i := range pos {
+		if pos[i] != before[i] {
+			t.Fatal("roof vertices changed")
+		}
+	}
+}

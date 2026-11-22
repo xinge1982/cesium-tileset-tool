@@ -21,7 +21,7 @@ func triangulateTunnelWallCDT(pos [][3]float32) ([]uint32, error) {
 		if quad[0] == quad[1] && quad[2] == quad[3] {
 			continue
 		}
-		local, err := mgltf.CDTRingKeepWinding(quad)
+		local, err := triangulateWallSectionQuad(quad)
 		if err != nil {
 			return nil, fmt.Errorf("wall segment %d: %w", i, err)
 		}
@@ -57,4 +57,28 @@ func pairedTunnelWallHalf(pos [][3]float32) int {
 		}
 	}
 	return half
+}
+
+// 在墙片自身的里程-高度平面执行 CDT，再将索引直接用于原始三维点。
+// 避免毫米以下非共面墙片在主坐标轴投影中压缩掉有效的短边。
+func triangulateWallSectionQuad(quad [][3]float32) ([]uint32, error) {
+	bottom := math.Hypot(float64(quad[1][0])-float64(quad[0][0]), float64(quad[1][2])-float64(quad[0][2]))
+	top := math.Hypot(float64(quad[2][0])-float64(quad[3][0]), float64(quad[2][2])-float64(quad[3][2]))
+	length := math.Max(bottom, top)
+	if length == 0 {
+		return mgltf.CDTRingKeepWinding(quad)
+	}
+	projected := make([][3]float32, 4)
+	for i, p := range quad {
+		station := float32(0)
+		if i == 1 || i == 2 {
+			station = float32(length)
+		}
+		projected[i] = [3]float32{station, p[1] - quad[0][1], 0}
+	}
+	indices, err := mgltf.CDTRingKeepWinding(projected)
+	if err != nil {
+		return nil, err
+	}
+	return nondegenerateSpatialTriangles(quad, indices), nil
 }

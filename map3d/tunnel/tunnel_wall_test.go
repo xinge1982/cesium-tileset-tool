@@ -217,6 +217,7 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 
 	roofSections := make(roofSectionGraph)
 	var roofCenterUVs [][2]float32
+	roofUnfolded := 0
 	roofWelders := make(map[string]*VertexWelder)
 	for i := range fc.Features {
 		g := fc.Features[i].Geometry
@@ -246,14 +247,21 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 			pos = append(pos, [3]float32{float32(e), float32(u), float32(-n)})
 		}
 
+		surfaceType, _ := fc.Features[i].Properties["surface_type"].(string)
 		sourceRing := pos
-		pos = normalizeClosedRing3D(pos)
+		if surfaceType == "left_wall" || surfaceType == "right_wall" {
+			// 保留上下边界一一对应的采样点，避免 float32 去重数量不同而破坏配对。
+			if len(pos) > 1 && pos[0] == pos[len(pos)-1] {
+				pos = pos[:len(pos)-1]
+			}
+		} else {
+			pos = normalizeClosedRing3D(pos)
+		}
 		if len(pos) < 3 {
 			t.Logf("skip degenerate feature %d (%v): fewer than three distinct consecutive vertices", i, fc.Features[i].Properties["surface_type"])
 			continue
 		}
 
-		surfaceType, _ := fc.Features[i].Properties["surface_type"].(string)
 		var reference *tunnelCenterline
 		groupID := tunnelGroupID(fc.Features[i].Properties["group_id"])
 		if centerlines != nil && (surfaceType == "left_wall" || surfaceType == "right_wall" || surfaceType == "arched_roof" || surfaceType == "flat_roof") {
@@ -265,6 +273,12 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 
 		if surfaceType == "arched_roof" || surfaceType == "flat_roof" {
 			localIndices, err := mgltf.CDTRingKeepWinding(pos)
+			if err != nil && len(pos) == 4 && fc.Features[i].Properties["from_station"] != nil && fc.Features[i].Properties["to_station"] != nil {
+				localIndices, err = triangulateRoofSectionQuad(pos)
+				if err == nil {
+					roofUnfolded++
+				}
+			}
 			if err != nil {
 				return fmt.Errorf("roof feature %d: %w", i, err)
 			}
@@ -350,6 +364,9 @@ func generateTunnelWallGlbTileset(t *testing.T, outPath, geojsonPath string) err
 		}
 	}
 
+	if roofUnfolded > 0 {
+		t.Logf("Unfolded %d roof quads with section constraints to avoid axis-projection collapse", roofUnfolded)
+	}
 	// 循环结束后，统一生成弧顶 primitive
 	if len(roofPositions) >= 3 && len(roofIndices) >= 3 {
 		//FixRoofWinding(
